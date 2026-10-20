@@ -1,3 +1,4 @@
+import "dotenv/config";
 import Fastify from "fastify";
 import { getX402Configuration } from "./x402.js";
 
