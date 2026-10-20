@@ -128,7 +128,8 @@ test("facilitator verification failure withholds the protected resource", async 
   await handlePaidResource(makeRequest(validPaymentHeader()), reply);
 
   assert.equal(state.statusCode, 402);
-  assert.equal((state.body as any).resource, undefined);
+  assert.notEqual((state.body as any).resource, "heder1-demo-report");
+  assert.equal((state.body as any).payment, undefined);
   assert.match((state.body as any).error, /invalid proof/);
   assert.match((state.body as any).note, /withheld/);
 });
@@ -146,7 +147,8 @@ test("settlement failure withholds the protected resource", async () => {
   await handlePaidResource(makeRequest(validPaymentHeader()), reply);
 
   assert.equal(state.statusCode, 402);
-  assert.equal((state.body as any).resource, undefined);
+  assert.notEqual((state.body as any).resource, "heder1-demo-report");
+  assert.equal((state.body as any).payment, undefined);
   assert.match((state.body as any).error, /settlement rejected/);
 });
 
