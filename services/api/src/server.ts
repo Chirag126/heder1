@@ -1,21 +1,22 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
+import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
 // Bind to localhost by default because the opt-in demo endpoint can transfer testnet HBAR.
 const host = process.env.HOST ?? "127.0.0.1";
 
-app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-payment-proof" }));
+app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-paid-resource" }));
 
 app.get("/api", async () => ({
   name: "heder1",
   description: "Security-first autonomous x402 payments on Hedera",
-  phase: "x402-payment-proof",
+  phase: "x402-paid-resource",
   paymentReady: Boolean(getX402Configuration()),
   paymentExecutionEnabled: process.env.HEDERA_X402_DEMO_ENABLED === "true" && process.env.NODE_ENV !== "production",
-  note: "Payment execution is opt-in for local testnet demos only."
+  note: "Paid-resource endpoint is testnet-only, fixed-price, and settles through the configured facilitator."
 }));
 
 app.get("/api/x402/status", async (_request, reply) => {
@@ -28,9 +29,10 @@ app.get("/api/x402/status", async (_request, reply) => {
       receiverAccountId: config?.receiverAccountId ?? null,
       facilitatorUrl: config?.facilitatorUrl ?? null,
       paymentExecutionEnabled: process.env.HEDERA_X402_DEMO_ENABLED === "true" && process.env.NODE_ENV !== "production",
-      readyForPaymentTest: false,
+      readyForPaymentTest: Boolean(config),
+      paidResourcePolicy: { ...paidResourcePolicy, receiverAccountId: config?.receiverAccountId ?? null },
       reason: config
-        ? "Payer, receiver, and facilitator configuration are available. Run a small explicit testnet payment only after opting in locally."
+        ? "Payer, receiver, and facilitator configuration are available. The paid-resource route is available for local testnet testing."
         : "Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env."
     };
   } catch (error) {
@@ -38,6 +40,13 @@ app.get("/api/x402/status", async (_request, reply) => {
     return { network: process.env.HEDERA_NETWORK ?? "testnet", sdkConfigured: false, readyForPaymentTest: false, paymentExecutionEnabled: false, reason: error instanceof Error ? error.message : "Invalid x402 configuration." };
   }
 });
+
+/**
+ * Merchant resource. Requests without a proof receive HTTP 402 and the exact
+ * fixed-price requirements. The resource is returned only after facilitator
+ * verification and settlement both succeed.
+ */
+app.get("/api/x402/paid-resource", handlePaidResource);
 
 /**
  * Explicit local testnet payment. This endpoint can transfer 0.001 HBAR from
