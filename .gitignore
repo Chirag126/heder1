@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+.vite/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
