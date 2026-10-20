@@ -2,13 +2,13 @@
 
 **Security-first autonomous AI-agent payments on Hedera using x402.**
 
-> **Current status:** x402 configuration groundwork. The API can report whether payer credentials are configured and which testnet receiver account is configured. A successful paid request and on-chain settlement have **not yet been verified**. Configuration readiness is not proof of a completed payment.
+> **Current status:** x402 testnet payment-attempt groundwork. The API can build a fixed-size HBAR payment payload, ask a compatible facilitator to verify and settle it, and return the facilitator transaction ID when settlement succeeds. A successful live settlement has not yet been verified. This is not yet a complete merchant HTTP 402 challenge/retry integration.
 
-## Current receiver configuration
+## Receiver and payment safety
 
 The demo receiver is Hedera testnet account `0.0.11044329`. Override it locally with `HEDERA_RECEIVER_ACCOUNT_ID` if needed. The receiver account ID is public; its private key is not needed by this API for receiving payments.
 
-This configuration change does not execute payments. The protected-resource handshake and facilitator-backed settlement still need to be implemented and verified before `readyForPaymentTest` can be considered true.
+The demo payment endpoint can send **0.001 HBAR** from the configured payer. It is disabled by default, refuses production mode, and requires an explicit JSON confirmation. Keep the API bound to localhost while testing; do not expose this endpoint publicly. Do not enable this feature in production.
 
 ## Stack
 
@@ -31,16 +31,18 @@ npm install --global pnpm@10
 pnpm install
 ```
 
-For local API configuration, copy `services/api/.env.example` to `services/api/.env` and set your **Hedera testnet ECDSA payer account**:
+Copy `services/api/.env.example` to `services/api/.env` and set your **Hedera testnet ECDSA payer account** locally:
 
 ```dotenv
 HEDERA_NETWORK=testnet
 HEDERA_CLIENT_ACCOUNT_ID=0.0.YOUR_TESTNET_PAYER_ACCOUNT
 HEDERA_CLIENT_PRIVATE_KEY=YOUR_TESTNET_ECDSA_PRIVATE_KEY
 HEDERA_RECEIVER_ACCOUNT_ID=0.0.11044329
+HEDERA_X402_FACILITATOR_URL=https://api.testnet.blocky402.com
+HEDERA_X402_DEMO_ENABLED=false
 ```
 
-Create/fund testnet accounts through https://portal.hedera.com/. Never commit `.env` files, private keys, seed phrases, or funded-wallet credentials. Do not use mainnet keys. The status route does not initiate a payment.
+Create/fund testnet accounts through https://portal.hedera.com/. Never commit `.env` files, private keys, seed phrases, or funded-wallet credentials. Do not use mainnet keys.
 
 Run both apps:
 
@@ -52,6 +54,22 @@ pnpm dev
 - API health: http://localhost:4000/api/health
 - x402 configuration status: http://localhost:4000/api/x402/status
 
+## Explicit testnet payment attempt
+
+First verify the facilitator advertises the exact Hedera testnet scheme by checking `HEDERA_X402_FACILITATOR_URL/supported`. Keep `HEDERA_X402_DEMO_ENABLED=false` until you intentionally want to attempt a testnet transfer.
+
+For a local test only, set `HEDERA_X402_DEMO_ENABLED=true` in `services/api/.env`, keep the API on localhost, and restart it. Then send this explicit request:
+
+```bash
+curl -X POST http://localhost:4000/api/x402/demo-payment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"confirmPayment\":true}"
+```
+
+This endpoint is a direct facilitator-backed payment attempt, not the full merchant 402 challenge/retry flow. It is fixed at 100,000 tinybars (0.001 HBAR) and does not accept a caller-supplied amount or destination. A successful response must include the facilitator's transaction ID; verify it on [HashScan Testnet](https://hashscan.io/testnet). If the facilitator is unavailable or does not advertise `hedera:testnet`, the endpoint fails closed.
+
+After the test, set `HEDERA_X402_DEMO_ENABLED=false` again.
+
 Validate locally:
 
 ```bash
@@ -59,25 +77,19 @@ pnpm typecheck
 pnpm build
 ```
 
-## Planned payment architecture
+## Remaining work
 
-1. The dashboard displays agent activity, budgets, decisions, and transaction evidence.
-2. The agent discovers priced services and requests resources through x402.
-3. A policy engine rejects disallowed providers or over-budget requests before payment authorization.
-4. A merchant endpoint returns HTTP 402 payment requirements using the configured receiver account and serves the protected resource after valid settlement.
-5. A compatible facilitator verifies and settles payment on Hedera testnet.
-6. The API records transaction ID and on-chain evidence; HCS logging is planned for a later phase.
-
-The Hedera exact scheme supports HBAR using asset ID `0.0.0` (amounts in tinybars) and compatible HTS fungible tokens. A facilitator compatible with `hedera:testnet` is required to sponsor network fees and settle the transaction. See the official x402 specification and package docs before enabling real settlement.
+1. Implement a proper merchant endpoint that returns HTTP 402 payment requirements and serves the resource only after verification/settlement.
+2. Add a client-side automatic 402 retry with the x402 fetch client.
+3. Add spending-policy enforcement before any payment.
+4. Add automated tests, HCS audit records, deployment, and a demo.
 
 ## Official references
 
 - [Hedera x402 overview](https://docs.hedera.com/solutions/ai/x402)
 - [How x402 works](https://docs.hedera.com/solutions/ai/x402/how-it-works)
-- [Pay with x402](https://docs.hedera.com/solutions/ai/x402/pay-with-x402)
-- [Merchant integration](https://docs.hedera.com/solutions/ai/x402/merchant-integration)
-- [Facilitators](https://docs.hedera.com/solutions/ai/x402/facilitators)
 - [Hedera x402 TypeScript package](https://www.npmjs.com/package/@x402/hedera)
+- [Blocky402 x402 v2 quickstart and facilitator API](https://blocky402.com/docs/quickstart/)
 - [Exact Hedera scheme specification](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_hedera.md)
 
 ## Development status
@@ -85,12 +97,13 @@ The Hedera exact scheme supports HBAR using asset ID `0.0.0` (amounts in tinybar
 - [x] Repository foundation, dashboard shell, and Fastify health endpoint
 - [x] x402 SDK dependencies and testnet payer configuration-status endpoint
 - [x] Explicit receiver account configuration for Hedera testnet
-- [ ] Verified paid-resource handshake and testnet settlement
+- [x] Opt-in, fixed-amount facilitator-backed testnet payment attempt
+- [ ] Live settlement verified with transaction ID and HashScan
+- [ ] Complete HTTP 402 merchant handshake and client retry
 - [ ] Spending-policy enforcement
 - [ ] HCS audit topic
 - [ ] Automated integration tests
 - [ ] Public deployment
-- [ ] Verified transaction ID and HashScan link
 - [ ] Demo video (5 minutes or less)
 
 ## License
