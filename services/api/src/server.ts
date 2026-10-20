@@ -1,10 +1,10 @@
-import "dotenv/config";
 import Fastify from "fastify";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
-const host = process.env.HOST ?? "0.0.0.0";
+// Bind to localhost by default because the opt-in demo endpoint can transfer testnet HBAR.
+const host = process.env.HOST ?? "127.0.0.1";
 
 app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-payment-proof" }));
 
