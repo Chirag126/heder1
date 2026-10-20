@@ -19,6 +19,11 @@ const signer = createClientHederaSigner(
 );
 const client = new x402Client()
   .register("hedera:*", new ExactHederaScheme(signer))
+  // Hedera's scheme does not identify this native HBAR asset as a default
+  // spend-control asset in this installed version. Allow assets through this
+  // preliminary gate, then enforce the complete exact terms in the policy below.
+  // Do not remove or loosen the policy: it is the actual authorization boundary.
+  .setSpendControls({ allowedAssets: true })
   .registerPolicy((_version, accepts) =>
     accepts.filter((item) =>
       item.network === "hedera:testnet" &&
