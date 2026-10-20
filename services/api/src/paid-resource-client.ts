@@ -1,6 +1,7 @@
 import { x402Client } from "@x402/core/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
-import { ExactHederaScheme, createClientHederaSigner, PrivateKey } from "@x402/hedera";
+import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
+import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 
 const config = getX402Configuration();
