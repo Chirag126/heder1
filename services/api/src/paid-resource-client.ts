@@ -19,13 +19,11 @@ const signer = createClientHederaSigner(
 );
 const client = new x402Client()
   .register("hedera:*", new ExactHederaScheme(signer))
-  // HBAR's native Hedera asset id is 0.0.0. Explicitly allow only this asset
-  // and cap each payment at 100,000 tinybars (0.001 HBAR).
-  .setSpendControls({
-    allowedAssets: [
-      { network: "hedera:testnet", asset: "0.0.0", maxAmountPerPayment: "100000" },
-    ],
-  })
+  // Hedera's scheme does not identify this native HBAR asset as a default
+  // spend-control asset in this installed version. Allow assets through this
+  // preliminary gate, then enforce the complete exact terms in the policy below.
+  // Do not remove or loosen the policy: it is the actual authorization boundary.
+  .setSpendControls({ allowedAssets: true })
   .registerPolicy((_version, accepts) =>
     accepts.filter((item) =>
       item.network === "hedera:testnet" &&
