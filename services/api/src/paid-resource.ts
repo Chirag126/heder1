@@ -25,8 +25,12 @@ function decodePaymentHeader(value: string): JsonRecord {
   } catch {
     throw new Error("Payment proof must be a base64-encoded x402 v2 JSON payload.");
   }
-  if (!isRecord(parsed) || parsed.x402Version !== 2 || parsed.scheme !== "exact" || parsed.network !== "hedera:testnet") {
-    throw new Error("Payment proof must use x402 v2 exact on hedera:testnet.");
+  // x402 v2 puts scheme/network inside the "accepted" requirements object.
+  // The v1 top-level scheme/network fields are not part of the v2 payload shape.
+  const accepted = isRecord(parsed) && isRecord(parsed.accepted) ? parsed.accepted : null;
+  if (!isRecord(parsed) || parsed.x402Version !== 2 || !accepted ||
+      accepted.scheme !== "exact" || accepted.network !== "hedera:testnet") {
+    throw new Error("Payment proof must use x402 v2 with accepted exact requirements on hedera:testnet.");
   }
   return parsed;
 }
@@ -114,7 +118,17 @@ export async function handlePaidResource(request: FastifyRequest, reply: Fastify
   if (!feePayer) return reply.code(503).send({ error: "Facilitator does not advertise an exact Hedera testnet fee payer." });
 
   const requirements = makeRequirements(config.receiverAccountId, feePayer);
-  const challenge = { x402Version: 2, accepts: [requirements], resource: "/api/x402/paid-resource", description: "Access to the heder1 demo report; fixed testnet price 0.001 HBAR." };
+  const challenge = {
+    x402Version: 2,
+    resource: {
+      url: "/api/x402/paid-resource",
+      description: "Access to the heder1 demo report; fixed testnet price 0.001 HBAR.",
+      mimeType: "application/json",
+      serviceName: "heder1",
+    },
+    accepts: [requirements],
+    extensions: {},
+  };
   const paymentHeader = request.headers["payment-signature"] ?? request.headers["x-payment"];
   if (typeof paymentHeader !== "string" || !paymentHeader) {
     const encoded = Buffer.from(JSON.stringify(challenge)).toString("base64");
