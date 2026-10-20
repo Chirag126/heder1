@@ -1,0 +1,18 @@
+{
+  "name": "heder1",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"pnpm --filter @heder1/api dev\" \"pnpm --filter @heder1/web dev\"",
+    "build": "pnpm --filter @heder1/api build && pnpm --filter @heder1/web build",
+    "typecheck": "pnpm --filter @heder1/api typecheck && pnpm --filter @heder1/web typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3"
+  }
+}

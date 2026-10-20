@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "usernamehw.errorlens",
+    "eamodio.gitlens",
+    "GitHub.vscode-pull-request-github",
+    "ms-vscode-remote.remote-wsl"
+  ]
+}
