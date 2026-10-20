@@ -24,12 +24,16 @@ app.get("/api/x402/status", async (_request, reply) => {
       network: "hedera:testnet",
       sdkConfigured: Boolean(config),
       accountId: config?.accountId ?? null,
+      receiverAccountId: config?.receiverAccountId ?? null,
       readyForPaymentTest: false,
-      reason: config ? "Credentials are configured; protected-resource handshake and settlement still need verification." : "Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env."
+      paymentExecutionEnabled: false,
+      reason: config
+        ? "Payer and receiver configuration are available; the protected-resource handshake and facilitator settlement still need implementation and verification."
+        : "Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env."
     };
   } catch (error) {
     reply.code(400);
-    return { network: process.env.HEDERA_NETWORK ?? "testnet", sdkConfigured: false, readyForPaymentTest: false, reason: error instanceof Error ? error.message : "Invalid x402 configuration." };
+    return { network: process.env.HEDERA_NETWORK ?? "testnet", sdkConfigured: false, readyForPaymentTest: false, paymentExecutionEnabled: false, reason: error instanceof Error ? error.message : "Invalid x402 configuration." };
   }
 });
 

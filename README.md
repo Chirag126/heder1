@@ -2,14 +2,13 @@
 
 **Security-first autonomous AI-agent payments on Hedera using x402.**
 
-> **Current status:** Phase 1 integration groundwork. The dashboard and API are implemented, the API can report whether testnet client credentials are configured, and the Hedera x402 SDK is wired into the API package. A successful paid request and on-chain settlement have **not yet been verified**. Configuration readiness is not proof of a completed payment.
+> **Current status:** x402 configuration groundwork. The API can report whether payer credentials are configured and which testnet receiver account is configured. A successful paid request and on-chain settlement have **not yet been verified**. Configuration readiness is not proof of a completed payment.
 
-## Phase 1 scope
+## Current receiver configuration
 
-- Add the official TypeScript x402 core, fetch, and Hedera packages.
-- Configure a Hedera testnet x402 client from server-side environment variables.
-- Expose `GET /api/x402/status` to check whether testnet credentials are configured without revealing the private key.
-- Keep actual payment execution disabled until the protected-resource handshake and settlement are implemented and verified.
+The demo receiver is Hedera testnet account `0.0.11044329`. Override it locally with `HEDERA_RECEIVER_ACCOUNT_ID` if needed. The receiver account ID is public; its private key is not needed by this API for receiving payments.
+
+This configuration change does not execute payments. The protected-resource handshake and facilitator-backed settlement still need to be implemented and verified before `readyForPaymentTest` can be considered true.
 
 ## Stack
 
@@ -32,12 +31,13 @@ npm install --global pnpm@10
 pnpm install
 ```
 
-For local API configuration, create `services/api/.env` and add a **Hedera testnet ECDSA account**:
+For local API configuration, copy `services/api/.env.example` to `services/api/.env` and set your **Hedera testnet ECDSA payer account**:
 
 ```dotenv
 HEDERA_NETWORK=testnet
-HEDERA_CLIENT_ACCOUNT_ID=0.0.YOUR_TESTNET_ACCOUNT
-HEDERA_CLIENT_PRIVATE_KEY=0xYOUR_TESTNET_ECDSA_PRIVATE_KEY
+HEDERA_CLIENT_ACCOUNT_ID=0.0.YOUR_TESTNET_PAYER_ACCOUNT
+HEDERA_CLIENT_PRIVATE_KEY=YOUR_TESTNET_ECDSA_PRIVATE_KEY
+HEDERA_RECEIVER_ACCOUNT_ID=0.0.11044329
 ```
 
 Create/fund testnet accounts through https://portal.hedera.com/. Never commit `.env` files, private keys, seed phrases, or funded-wallet credentials. Do not use mainnet keys. The status route does not initiate a payment.
@@ -59,14 +59,16 @@ pnpm typecheck
 pnpm build
 ```
 
-## Planned architecture
+## Planned payment architecture
 
 1. The dashboard displays agent activity, budgets, decisions, and transaction evidence.
 2. The agent discovers priced services and requests resources through x402.
 3. A policy engine rejects disallowed providers or over-budget requests before payment authorization.
-4. A merchant endpoint returns HTTP 402 payment requirements and serves the protected resource after valid settlement.
-5. A supported facilitator settles payment on Hedera testnet.
-6. An audit service records payment and policy evidence; HCS logging is planned for a later phase.
+4. A merchant endpoint returns HTTP 402 payment requirements using the configured receiver account and serves the protected resource after valid settlement.
+5. A compatible facilitator verifies and settles payment on Hedera testnet.
+6. The API records transaction ID and on-chain evidence; HCS logging is planned for a later phase.
+
+The Hedera exact scheme supports HBAR using asset ID `0.0.0` (amounts in tinybars) and compatible HTS fungible tokens. A facilitator compatible with `hedera:testnet` is required to sponsor network fees and settle the transaction. See the official x402 specification and package docs before enabling real settlement.
 
 ## Official references
 
@@ -76,11 +78,13 @@ pnpm build
 - [Merchant integration](https://docs.hedera.com/solutions/ai/x402/merchant-integration)
 - [Facilitators](https://docs.hedera.com/solutions/ai/x402/facilitators)
 - [Hedera x402 TypeScript package](https://www.npmjs.com/package/@x402/hedera)
+- [Exact Hedera scheme specification](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_hedera.md)
 
 ## Development status
 
 - [x] Repository foundation, dashboard shell, and Fastify health endpoint
-- [x] x402 SDK dependencies and testnet configuration-status endpoint
+- [x] x402 SDK dependencies and testnet payer configuration-status endpoint
+- [x] Explicit receiver account configuration for Hedera testnet
 - [ ] Verified paid-resource handshake and testnet settlement
 - [ ] Spending-policy enforcement
 - [ ] HCS audit topic
