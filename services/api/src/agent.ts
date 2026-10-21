@@ -7,6 +7,7 @@ import { reserveAgentSpend } from "./spending-firewall.js";
 
 const DEFAULT_RESOURCE_URL = "http://127.0.0.1:4000/api/x402/paid-resource";
 const RESOURCE_PATH = "/api/x402/paid-resource";
+const EXPECTED_RESOURCE_ID = "heder1-demo-report";
 const MAX_AMOUNT_TINYBARS = 100_000;
 
 type JsonRecord = Record<string, unknown>;
@@ -40,8 +41,8 @@ export function extractSettlementReceipt(status: number, body: unknown): Settlem
   if (payment.status !== "settled" || typeof payment.transaction !== "string" || !payment.transaction.trim()) {
     throw new Error("Resource response did not confirm settlement with a transaction ID.");
   }
-  if (typeof body.resource !== "string" || !body.resource.trim()) {
-    throw new Error("Settlement receipt was present, but the expected protected resource was missing.");
+  if (body.resource !== EXPECTED_RESOURCE_ID) {
+    throw new Error("Settlement receipt did not identify the expected protected resource.");
   }
   return {
     transactionId: payment.transaction.trim(),
