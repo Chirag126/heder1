@@ -75,7 +75,7 @@ test("agent does not treat HTTP success without a settlement receipt as payment 
   }), /did not confirm settlement/);
   assert.throws(() => extractSettlementReceipt(200, {
     payment: { status: "settled", transaction: "0.0.123@1760000000.000000001" },
-  }), /expected protected resource was missing/);
+  }), /did not identify the expected protected resource/);
   assert.throws(() => extractSettlementReceipt(200, {
     resource: "different-resource",
     payment: { status: "settled", transaction: "0.0.123@1760000000.000000001" },
