@@ -81,7 +81,7 @@ export async function reserveAgentSpend(
   } catch {
     return { allowed: false, reason: "Invalid payment resource URL." };
   }
-  if (target.protocol !== "http:" ||
+  if (target.protocol !== "http:" || target.port !== "4000" ||
       !["127.0.0.1", "localhost", "[::1]"].includes(target.hostname) ||
       target.pathname !== FIREWALL_RESOURCE_PATH ||
       target.search || target.hash || target.username || target.password ||
