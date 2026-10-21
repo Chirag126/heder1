@@ -78,9 +78,13 @@ export function consumeAuthorizationGrant(
   if (!token) return { allowed: false as const, reason: "A wallet-signed one-time authorization is required." };
   const grant = grants.get(token);
   if (!grant) return { allowed: false as const, reason: "Authorization is invalid, expired, or already used." };
-  grants.delete(token);
-  if (grant.expiresAt <= now || grant.scope !== expectedScope) {
+  if (grant.expiresAt <= now) {
+    grants.delete(token);
     return { allowed: false as const, reason: "Authorization expired or scope is invalid for this endpoint." };
   }
+  if (grant.scope !== expectedScope) {
+    return { allowed: false as const, reason: "Authorization expired or scope is invalid for this endpoint." };
+  }
+  grants.delete(token);
   return { allowed: true as const, account: grant.account, scope: grant.scope };
 }
