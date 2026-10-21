@@ -6,7 +6,7 @@ import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { randomUUID } from "node:crypto";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
-import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
+import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
@@ -83,11 +83,11 @@ app.get("/api/x402/summary", handleShortSummaryResource);
 
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
-app.post<{ Body: { account?: string; chainId?: number } }>("/api/authorization/challenge", async (request, reply) => {
+app.post<{ Body: { account?: string; chainId?: number; scope?: string } }>("/api/authorization/challenge", async (request, reply) => {
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
-    const challenge = createAuthorizationChallenge(request.body.account);
+    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope);
     await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { account: request.body.account, chainId: 296, nonce: challenge.nonce, expiresAt: challenge.expiresAt } });
     return challenge;
   } catch (error) {
@@ -254,7 +254,7 @@ app.post("/api/agent/run", async (request, reply) => {
     });
   }
   const token = request.headers["x-heder1-authorization"];
-  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
+  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Connect a Hedera Testnet wallet and approve one agent invocation in the dashboard." });
