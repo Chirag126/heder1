@@ -2,7 +2,7 @@ services:
   - type: web
     name: heder1-api
     runtime: node
-    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @heder1/api build
+    buildCommand: pnpm install --no-frozen-lockfile && pnpm --filter @heder1/api build
     startCommand: pnpm --filter @heder1/api start
     healthCheckPath: /api/health
     envVars:
@@ -27,7 +27,7 @@ services:
     name: heder1-web
     runtime: static
     plan: free
-    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @heder1/web build
+    buildCommand: pnpm install --no-frozen-lockfile && pnpm --filter @heder1/web build
     staticPublishPath: apps/web/dist
     envVars:
       - key: VITE_API_BASE_URL
