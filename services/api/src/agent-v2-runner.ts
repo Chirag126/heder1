@@ -12,7 +12,6 @@ import {
   parseX402Requirements,
   selectCheapestEligibleService,
   summarizeTaskPlan,
-  validateAgentV2Limits,
   type AgentV2Limits,
 } from "./agent-v2.js";
 
@@ -84,6 +83,7 @@ export async function runAgentV2Task(
   const plan = summarizeTaskPlan(input.goal, limits);
   if (!plan.accepted) throw new Error(plan.errors.join(" "));
   if (limits.maxPaidCalls < 1) throw new Error("At least one paid call must be permitted to complete a paid-resource task.");
+  if (limits.maxRetries < 1 || limits.maxAttemptsPerService < 1) throw new Error("At least one x402 challenge/retry attempt per selected service is required.");
 
   const runId = options.runId ?? randomUUID();
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(limits.maxRuntimeMs)]);
@@ -123,7 +123,7 @@ export async function runAgentV2Task(
     network: "hedera:testnet",
   });
   if (!decision.selected) {
-    return Promise.reject(new Error("No approved service advertises an x402 requirement that fits the user's budget and payment policy. No payment was attempted."));
+    throw new Error("No approved service advertises an x402 requirement that fits the user's budget and payment policy. No payment was attempted.");
   }
   if (limits.maxPaidCalls < 1) throw new Error("Paid-call limit reached before payment.");
   if (httpCalls + 2 > limits.maxSteps) throw new Error("Insufficient remaining steps for the x402 payment challenge/retry flow.");
