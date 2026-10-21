@@ -23,6 +23,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 4: wallet authorization](#phase-4-wallet-authorization)
 - [Phase 5: verifiable audit trail and HCS](#phase-5-verifiable-audit-trail-and-hcs)
 - [Phase 6: live product dashboard](#phase-6-live-product-dashboard)
+- [Phase 7: testing and security hardening](#phase-7-testing-and-security-hardening)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -407,6 +408,20 @@ The dashboard uses the following API endpoints:
 | `GET /api/audit/verify-hcs` | Verify a hash against a public Mirror Node message |
 
 **Safety boundary:** the agent remains disabled by default. If explicitly enabled for local testnet development, an authorized run may spend up to 0.001 HBAR. The dashboard cannot override backend policy. The local audit log and spending firewall are not multi-instance safe, and a transaction link should be independently checked before treating it as proof of settlement.
+
+## Phase 7: testing and security hardening
+
+Phase 7 adds automated API integration coverage and adversarial tests around the payment and audit boundaries. CI runs the API test suite before type-checking and building.
+
+Coverage includes:
+
+- API health, invalid audit-history limits, and disabled-by-default agent/demo-payment routes using Fastify injection (no listening socket required).
+- Duplicate concurrent x402 requests with a mocked facilitator, asserting only one verification/settlement sequence occurs.
+- Audit history secret-key filtering for signatures, tokens, API keys, passwords, authorization values, cookies, and mnemonic fields.
+- Spending-firewall policy-bypass attempts involving remote hosts, alternate paths, URL credentials, query strings, fragments, and malformed amounts/receivers.
+- Existing authorization replay/expiry, facilitator failure, settlement withholding, and audit tamper-detection tests remain part of the suite.
+
+All payment tests use mocked facilitator responses and do not submit HBAR or HCS transactions. Keep `HEDERA_AGENT_ENABLED=false`, `HEDERA_X402_DEMO_ENABLED=false`, and `HEDERA_AUDIT_HCS_ENABLED=false` while running automated tests.
 
 ## Validation and testing
 
