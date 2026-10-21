@@ -161,3 +161,14 @@ The web app includes an EVM-provider wallet connection flow, connected account d
 - This UI consent is not yet wired to authorize `POST /api/agent/run`. The backend agent remains separately disabled by default and uses its configured server-side testnet signer when enabled. Keep `HEDERA_AGENT_ENABLED=false` unless deliberately running the local testnet demo.
 - An EVM-compatible provider is required. Wallet behavior depends on the wallet's support for Hedera Testnet EVM chain ID 296 and `wallet_switchEthereumChain`.
 - Before production use, add a server-verified, short-lived, one-time authorization grant bound to a wallet signature and payment policy; never trust a frontend checkbox as an authorization boundary.
+
+
+### Phase 4 server-side authorization enforcement
+
+The dashboard now asks the wallet to sign a server-generated, short-lived challenge using `personal_sign`. The API recovers and validates the signing address, consumes the challenge once, and issues a short-lived single-use bearer grant scoped to one agent invocation. `POST /api/agent/run` rejects calls without that grant before invoking the agent. The grant is consumed before the agent is called, including failed runs, to avoid reusing authorization.
+
+- Challenge scope is fixed to Hedera Testnet chain ID 296, one agent run, the allowlisted paid resource, and the existing 0.001 HBAR per-payment ceiling.
+- The wallet signature proves control of the wallet address; it does not expose a private key to heder1.
+- The grant and challenge stores are **in-memory and single-process only**. Restarting the API invalidates outstanding grants, and multi-instance deployment must use a shared, atomic, durable store plus rate limiting.
+- The backend agent remains disabled unless `HEDERA_AGENT_ENABLED=true` in local testnet development and `HEDERA_NETWORK=testnet`. A valid wallet grant does not override this switch.
+- The wallet authorization layer is a local prototype. Do not expose these endpoints publicly or treat them as production-ready until persistence, origin/CSRF controls, rate limiting, and deployment-specific wallet/account mapping have been reviewed.
