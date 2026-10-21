@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. Phase 10 (Autonomous agent v2) is in progress; deterministic planning and policy primitives are being added, but multi-service paid execution is not yet accepted. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
+> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. Phase 10 (Autonomous agent v2) implementation is under review; the deterministic multi-service runner, approved local registry, bounded payment policy, and scoped wallet authorization are implemented, but live testnet acceptance is still required. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -43,7 +43,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
-- **Phase 10 planning foundation:** deterministic parsing and filtering of x402 v2 payment requirements with bounded task limits. Multi-service payment execution remains in progress.
+- **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. Local testnet acceptance is still required.
 
 ## Architecture
 
@@ -572,4 +572,14 @@ To be selected before public release.
 
 ## Phase 10: autonomous agent v2
 
-Phase 10 is in progress. The deterministic planning foundation is documented in [`docs/PHASE-10.md`](docs/PHASE-10.md). It adds bounded limit validation, x402 v2 requirement parsing, and deterministic cheapest-eligible candidate selection. It does not yet implement live multi-service discovery or paid multi-service execution. Do not enable public payment execution; keep the existing Render safety flags disabled.
+The Phase 10 implementation is documented in [`docs/PHASE-10.md`](docs/PHASE-10.md). It provides two explicitly registered local testnet services, real HTTP 402 requirement inspection, deterministic cheapest-eligible selection, a persistent spend reservation before signing, a dedicated wallet authorization scope, bounded runtime/call limits, cancellation, safe-stop behavior, and receipt validation.
+
+New local endpoints:
+
+- `GET /api/agent/v2/services` — approved registry and informational price hints.
+- `GET /api/agent/v2/status` — feature status and policy.
+- `POST /api/agent/v2/run` — execute one bounded task after a Phase 10 wallet grant.
+- `POST /api/agent/v2/cancel` — request cancellation using the client-generated UUID `runId`.
+- `GET /api/x402/summary` — second paid service, priced at 50,000 tinybars (0.0005 HBAR).
+
+Set `HEDERA_AGENT_V2_ENABLED=true` only for local Hedera Testnet testing. Keep public Render payment execution disabled. The code and automated tests do not replace a live testnet payment and independent HashScan receipt check; Phase 10 is not complete until that acceptance run succeeds.
