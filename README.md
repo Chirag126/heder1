@@ -24,6 +24,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 5: verifiable audit trail and HCS](#phase-5-verifiable-audit-trail-and-hcs)
 - [Phase 6: live product dashboard](#phase-6-live-product-dashboard)
 - [Phase 7: testing and security hardening](#phase-7-testing-and-security-hardening)
+- [Phase 8: public deployment](#phase-8-public-deployment)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -422,6 +423,43 @@ Coverage includes:
 - Existing authorization replay/expiry, facilitator failure, settlement withholding, and audit tamper-detection tests remain part of the suite.
 
 All payment tests use mocked facilitator responses and do not submit HBAR or HCS transactions. Keep `HEDERA_AGENT_ENABLED=false`, `HEDERA_X402_DEMO_ENABLED=false`, and `HEDERA_AUDIT_HCS_ENABLED=false` while running automated tests.
+
+## Phase 8: public deployment
+
+The repository includes a Render Blueprint at `render.yaml` to deploy the API and dashboard as separate public services. Review the Blueprint and environment values before creating services. This config is a deployment starting point; it does not provision Hedera accounts, fund testnet HBAR, create HCS topics, or deploy services on your behalf.
+
+### Deploy with Render
+
+1. Push the merged code to GitHub and open the [Render Dashboard](https://dashboard.render.com/).
+2. Choose **New → Blueprint**, connect this repository, and select the `render.yaml` file.
+3. Review both services, their build/start commands, health check, static publish directory, and environment variables before approving creation.
+4. Wait for the API service health check at `/api/health` and the static dashboard deployment to finish.
+5. Open the public dashboard URL in a fresh private/incognito browser session and refresh the dashboard. Confirm API status, testnet network display, audit status, and disabled agent/payment controls.
+6. If you add a payer key later, set it only as a secret environment variable in the API service's hosting dashboard. Never add it to `render.yaml`, the frontend environment, Git, logs, or README.
+
+### Public-deployment security defaults
+
+- API binds to `0.0.0.0` only in production; local runs default to `127.0.0.1`.
+- `HEDERA_CORS_ORIGINS` is an exact comma-separated origin allowlist. The API rejects unknown browser origins and does not enable credentialed CORS.
+- `HEDERA_AGENT_ENABLED=false`, `HEDERA_X402_DEMO_ENABLED=false`, and `HEDERA_AUDIT_HCS_ENABLED=false` remain the deployment defaults.
+- Do not expose the agent or demo-payment endpoint publicly. The agent is intentionally disabled in production.
+- The baseline deployment intentionally omits payer and HCS operator private keys. The dashboard and read-only status endpoints can be verified without those credentials; payment readiness remains false until an operator deliberately configures a dedicated testnet payer.
+- If HCS anchoring is needed, create a testnet topic and use a dedicated least-privilege operator. Add its credentials only to the API host's secret environment settings and account for transaction fees.
+- CORS is not authentication or rate limiting. Do not enable payments or configure valuable credentials until public API rate limits, persistent multi-instance storage, monitoring, and an operational security review are in place.
+
+### Deployment environment
+
+The Blueprint sets the network to Hedera Testnet and keeps payment execution and HCS anchoring off. It also sets the frontend's API base URL and the API's allowed frontend origin. If your hosting provider assigns different URLs, update both `VITE_API_BASE_URL` on the frontend build service and `HEDERA_CORS_ORIGINS` on the API service to match the exact deployed origins, then redeploy both services.
+
+### Fresh-browser smoke test
+
+- Open the dashboard from a private/incognito window.
+- Confirm the API is connected and displays Hedera Testnet.
+- Confirm the agent is disabled and demo-payment execution is off.
+- Confirm audit status loads, including an empty state if no production-host audit file exists yet.
+- Confirm browser developer tools show no CORS errors.
+- Confirm wallet authorization can only issue a grant; agent execution remains disabled in production.
+- Do not perform a live payment as part of the deployment smoke test.
 
 ## Validation and testing
 
