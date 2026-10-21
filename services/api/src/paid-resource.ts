@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { getX402Configuration } from "./x402.js";
+import { appendAuditEvent } from "./audit-trail.js";
 
 type JsonRecord = Record<string, unknown>;
 const AMOUNT_TINYBARS = "100000"; // Spending policy: fixed 0.001 HBAR per resource request.
@@ -149,8 +150,10 @@ export async function handlePaidResource(request: FastifyRequest, reply: Fastify
   // Enforce the advertised scheme/network; facilitator verification enforces
   // the signed amount, destination, expiry, and chain-specific proof.
   const key = createHash("sha256").update(paymentHeader).digest("hex");
+  await appendAuditEvent({ event: "payment.attempted", outcome: "started", details: { proofHash: key, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
   try {
     const result = await settleOnce(key, paymentPayload, requirements, baseUrl);
+    await appendAuditEvent({ event: "payment.settled", outcome: "settled", details: { proofHash: key, transactionId: result.transaction, settledAt: result.settledAt, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
     return reply
       .header("payment-response", Buffer.from(JSON.stringify({ success: true, transaction: result.transaction, network: "hedera:testnet" })).toString("base64"))
       .header("cache-control", "no-store")
@@ -160,10 +163,12 @@ export async function handlePaidResource(request: FastifyRequest, reply: Fastify
         explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(result.transaction)}`,
       });
   } catch (error) {
+    const reason = error instanceof Error ? error.message : "Payment verification or settlement failed.";
+    await appendAuditEvent({ event: "payment.rejected", outcome: "rejected", details: { proofHash: key, reason, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
     request.log.error({ err: error }, "x402 paid-resource payment failed");
     return reply.code(402).send({
       ...challenge,
-      error: error instanceof Error ? error.message : "Payment verification or settlement failed.",
+      error: reason,
       note: "Resource withheld because successful settlement was not confirmed.",
     });
   }
