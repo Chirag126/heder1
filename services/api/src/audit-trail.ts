@@ -129,7 +129,7 @@ export async function listAuditRecords(limit = 25): Promise<Array<Record<string,
   return raw.split("\n").filter(Boolean).slice(-boundedLimit).reverse().map((line) => {
     const record = JSON.parse(line) as AuditRecord;
     const details = Object.fromEntries(Object.entries(record.details ?? {}).filter(([key]) =>
-      !/(nonce|signature|token|private.?key|seed|proof|secret|credential)/i.test(key)
+      !/(nonce|signature|token|private.?key|seed|proof|secret|credential|password|api.?key|authorization|cookie|mnemonic)/i.test(key)
     ));
     return {
       id: record.id,
