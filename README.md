@@ -587,7 +587,7 @@ Set `HEDERA_AGENT_V2_ENABLED=true` only for local Hedera Testnet testing. Keep p
 
 ### Phase 10 live run evidence — 2026-10-21
 
-**Local end-to-end run: PASS according to the API response. Independent explorer and HCS matching checks remain operator verification steps.**
+**Payment verification: PASS — the operator confirmed HashScan success and the public Hedera Testnet Mirror Node returned `SUCCESS` with matching 50,000-tinybar transfer details. The specific Phase 10 HCS audit-anchor match is still pending.**
 
 | Check | Observed result |
 |---|---|
@@ -599,6 +599,9 @@ Set `HEDERA_AGENT_V2_ENABLED=true` only for local Hedera Testnet testing. Keep p
 | Paid calls | 1 |
 | Budget | 500,000 tinybars (0.005 HBAR); API reports 50,000 tinybars reserved |
 | Settlement reported by API | `settled` |
+| Independent Mirror Node result | `SUCCESS`; transaction type `CRYPTOTRANSFER` |
+| Payment transfer | payer `0.0.11044318`: −50,000 tinybars; receiver `0.0.11044329`: +50,000 tinybars (0.0005 HBAR) |
+| Network fee | 234,000 tinybars, charged separately to account `0.0.7162784` in the returned transaction data |
 | Transaction ID returned | `0.0.7162784@1792621688.152704457` |
 | Wallet authorization | Correct Phase 10 scope; single-use grant consumed |
 
@@ -609,7 +612,7 @@ Evidence links:
 
 If you save the run response locally as `evidence/phase-10/successful-agent-run.json`, inspect it before committing and confirm it contains no secrets, signatures, authorization tokens, or payment proofs.
 
-**Independent verification still required:** open the HashScan link and confirm the transaction succeeded and its transfer details agree with the reported payment. Then use the local API's audit endpoints to locate the `payment.settled` and `agent.run_finished` records for this run and verify the matching HCS anchor against the public Mirror Node. Do not describe the Phase 10 payment or its specific audit record as independently verified until these checks are complete.
+**Payment verification is complete:** the operator confirmed HashScan shows success, and the public Mirror Node response reports `SUCCESS`, the expected 50,000-tinybar transfer from `0.0.11044318` to `0.0.11044329`, and a separate 234,000-tinybar network fee charged to `0.0.7162784`. This confirms the on-chain payment transfer. **Audit verification remains open:** locate the matching local `payment.settled` and `agent.run_finished` records and verify the specific audit hash against its HCS anchor before declaring the full Phase 10 evidence chain complete.
 
 PowerShell audit inspection (local API must be running):
 
