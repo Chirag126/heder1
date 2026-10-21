@@ -119,7 +119,7 @@ pnpm build
 pnpm typecheck
 ```
 
-The automated suite tests registry policy, per-service prices, firewall reservations, authorization-scope separation, cancellation handling, and a no-eligible-service API run. It does not prove that a live testnet payment succeeded. A live local run on 2026-10-21 returned `status: completed`, selected `heder1-short-summary`, reported `payment.status: settled`, and returned transaction ID `0.0.7162784@1792621688.152704457` for 50,000 tinybars (0.0005 HBAR). See the README's Phase 10 live-run evidence section. The operator must independently confirm HashScan success and match the relevant local audit event to its HCS anchor before marking every acceptance check complete.
+The automated suite tests registry policy, per-service prices, firewall reservations, authorization-scope separation, cancellation handling, and a no-eligible-service API run. It does not prove that a live testnet payment succeeded. A live local run on 2026-10-21 returned `status: completed`, selected `heder1-short-summary`, reported `payment.status: settled`, and returned transaction ID `0.0.7162784@1792621688.152704457` for 50,000 tinybars (0.0005 HBAR). See the README's Phase 10 live-run evidence section. The operator confirmed HashScan success, and the public Mirror Node returned `SUCCESS` for transaction `0.0.7162784-1792621688-152704457`. Its transfers show `0.0.11044318` sending 50,000 tinybars and `0.0.11044329` receiving 50,000 tinybars (0.0005 HBAR); a separate 234,000-tinybar network fee is charged to `0.0.7162784`. Payment verification is therefore complete. The relevant local audit events and the specific HCS anchor hash still need to be matched before all acceptance checks can be marked complete.
 
 ## Remaining limitation
 
