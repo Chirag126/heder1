@@ -8,6 +8,7 @@ const originalEnv = { ...process.env };
 const auditDir = await mkdtemp(join(tmpdir(), "heder1-api-integration-"));
 process.env.NODE_ENV = "test";
 process.env.HEDERA_AGENT_ENABLED = "false";
+process.env.HEDERA_AGENT_V2_ENABLED = "false";
 process.env.HEDERA_X402_DEMO_ENABLED = "false";
 process.env.HEDERA_AUDIT_HCS_ENABLED = "false";
 process.env.HEDERA_AUDIT_LOG_PATH = join(auditDir, "audit.jsonl");
@@ -64,6 +65,39 @@ test("agent execution remains disabled and does not require a wallet grant", asy
   const response = await app.inject({ method: "POST", url: "/api/agent/run" });
   assert.equal(response.statusCode, 403);
   assert.match(response.json().error, /disabled/);
+});
+
+
+test("Phase 10 registry exposes only two explicit approved testnet services", async () => {
+  const response = await app.inject({ method: "GET", url: "/api/agent/v2/services" });
+  assert.equal(response.statusCode, 200);
+  const payload = response.json();
+  assert.equal(payload.services.length, 2);
+  assert.deepEqual(payload.services.map((service: { id: string }) => service.id), [
+    "heder1-full-report",
+    "heder1-short-summary",
+  ]);
+  assert.equal(payload.services.every((service: { trust: string; allowed: boolean }) => service.trust === "approved" && service.allowed), true);
+  assert.match(payload.note, /actual HTTP 402 requirements/);
+});
+
+test("Phase 10 status and run remain disabled by default", async () => {
+  const status = await app.inject({ method: "GET", url: "/api/agent/v2/status" });
+  assert.equal(status.statusCode, 200);
+  assert.equal(status.json().enabled, false);
+  const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { goal: "Find the cheapest short report" } });
+  assert.equal(run.statusCode, 403);
+  assert.match(run.json().error, /disabled/);
+});
+
+test("Phase 10 cancellation rejects unknown run IDs", async () => {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/agent/v2/cancel",
+    payload: { runId: "00000000-0000-4000-8000-000000000000" },
+  });
+  assert.equal(response.statusCode, 404);
+  assert.equal(response.json().cancelled, false);
 });
 
 test("direct demo payment stays disabled without explicit opt-in", async () => {
