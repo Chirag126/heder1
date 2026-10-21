@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { Wallet } from "ethers";
+import { AUTHORIZATION_SCOPE_V2, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 
 const originalEnv = { ...process.env };
 const auditDir = await mkdtemp(join(tmpdir(), "heder1-api-integration-"));
@@ -88,6 +90,63 @@ test("Phase 10 status and run remain disabled by default", async () => {
   const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { goal: "Find the cheapest short report" } });
   assert.equal(run.statusCode, 403);
   assert.match(run.json().error, /disabled/);
+});
+
+
+test("Phase 10 stops through the API without paying when every 402 quote exceeds budget", async () => {
+  const previousFetch = globalThis.fetch;
+  const wallet = new Wallet("0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  process.env.HEDERA_AGENT_V2_ENABLED = "true";
+  process.env.HEDERA_NETWORK = "testnet";
+  process.env.HEDERA_CLIENT_ACCOUNT_ID = "0.0.123";
+  process.env.HEDERA_CLIENT_PRIVATE_KEY = "dummy-key-not-used-with-no-eligible-service";
+  process.env.HEDERA_RECEIVER_ACCOUNT_ID = "0.0.11044329";
+  process.env.HEDERA_X402_FACILITATOR_URL = "https://facilitator.test";
+  let fetchCalls = 0;
+  globalThis.fetch = async (input) => {
+    fetchCalls += 1;
+    assert.equal(String(input).startsWith("http://127.0.0.1:4000/api/x402/"), true);
+    const challenge = {
+      x402Version: 2,
+      resource: { url: String(input), description: "test service" },
+      accepts: [{
+        scheme: "exact",
+        network: "hedera:testnet",
+        amount: "600000",
+        asset: "0.0.0",
+        payTo: "0.0.11044329",
+        maxTimeoutSeconds: 300,
+      }],
+      extensions: {},
+    };
+    return new Response(JSON.stringify(challenge), {
+      status: 402,
+      headers: { "content-type": "application/json", "payment-required": Buffer.from(JSON.stringify(challenge)).toString("base64") },
+    });
+  };
+  try {
+    const challenge = createAuthorizationChallenge(wallet.address, Date.now(), AUTHORIZATION_SCOPE_V2);
+    const signature = await wallet.signMessage(challenge.message);
+    const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/v2/run",
+      headers: { "x-heder1-authorization": grant.authorizationToken },
+      payload: { goal: "Find the cheapest approved short report", budgetTinybars: 500000, maxPaidCalls: 3 },
+    });
+    assert.equal(response.statusCode, 422);
+    assert.equal(response.json().status, "stopped-safely");
+    assert.equal(response.json().paymentAttempted, false);
+    assert.match(response.json().error, /No approved service advertises/);
+    assert.equal(fetchCalls, 2, "only the two unpaid discovery requests should run; no paid retry or facilitator call");
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.HEDERA_AGENT_V2_ENABLED = "false";
+    delete process.env.HEDERA_CLIENT_ACCOUNT_ID;
+    delete process.env.HEDERA_CLIENT_PRIVATE_KEY;
+    delete process.env.HEDERA_RECEIVER_ACCOUNT_ID;
+    delete process.env.HEDERA_X402_FACILITATOR_URL;
+  }
 });
 
 test("Phase 10 cancellation rejects unknown run IDs", async () => {
