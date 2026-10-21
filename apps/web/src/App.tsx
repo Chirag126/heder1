@@ -195,7 +195,7 @@ export default function App() {
       <section className="grid" aria-label="Project capabilities">
         <article className="feature-card"><span className="number">01</span><h2>Autonomous x402</h2><p>A client discovers a price and completes a paid HTTP request through the configured facilitator.</p><span className="status">TESTNET DEMO</span></article>
         <article className="feature-card"><span className="number">02</span><h2>Spending firewall</h2><p>Per-payment caps, a daily budget, and attempt limits are checked before the agent signs.</p><span className="status">IMPLEMENTED · LOCAL LEDGER</span></article>
-        <article className="feature-card"><span className="number">03</span><h2>Explicit authorization</h2><p>Wallet identity and network are checked before the UI permits limited consent. No unrestricted wallet access.</p><span className="status">PHASE 4 · UI CONSENT ONLY</span></article>
+        <article className="feature-card"><span className="number">03</span><h2>Explicit authorization</h2><p>Wallet identity and network are checked before the UI permits limited consent. No unrestricted wallet access.</p><span className="status">PHASE 4 · SIGNED ONE-TIME GRANT</span></article>
       </section>
 
       <footer><span>heder1 · ETHGlobal Mumbai preparation</span><span>Testnet only · Never put secrets in frontend code</span></footer>
