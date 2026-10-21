@@ -64,7 +64,15 @@ For local testnet testing only:
 3. Keep `HEDERA_X402_DEMO_ENABLED=false`.
 4. Set `HEDERA_AGENT_V2_ENABLED=true` and `HEDERA_NETWORK=testnet` only in the local development environment.
 5. Fetch the service registry and status. Obtain and verify a Phase 10 wallet grant as described above.
-6. Execute the example goal:
+6. Generate a UUID in PowerShell (run in a separate terminal):
+
+```powershell
+[guid]::NewGuid().ToString()
+```
+
+Keep that UUID as `RUN_ID`. You must provide it in the run request so a second terminal can cancel the active task before the first request finishes.
+
+Execute the example goal:
 
 ```cmd
 curl -X POST http://127.0.0.1:4000/api/agent/v2/run ^
@@ -79,7 +87,7 @@ A successful response includes the selected service, actual amount, result, tota
 
 ## Cancellation
 
-The response from a successful run includes a `runId`. While a run is active, request cancellation:
+While the run request is still active in the first terminal, request cancellation from a second terminal using the same client-generated `runId`:
 
 ```cmd
 curl -X POST http://127.0.0.1:4000/api/agent/v2/cancel ^
