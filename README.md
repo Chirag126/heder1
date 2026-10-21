@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–6 have been implemented in the project workflow. The HCS testnet verification described below succeeded for the documented topic message. Run the latest tests, typecheck, and build after pulling the final changes. This remains a prototype, not a production-ready payment infrastructure.
+> **Current status:** Phases 0–7 are implemented. Phase 8 includes a Render deployment Blueprint and production CORS configuration; public hosting still requires an operator to create the Render services and verify their URLs. The HCS testnet verification described below succeeded for the documented topic message. This remains a prototype, not production-ready payment infrastructure.
 
 ## Table of contents
 
