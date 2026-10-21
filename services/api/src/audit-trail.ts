@@ -126,7 +126,7 @@ export async function listAuditRecords(limit = 25): Promise<Array<Record<string,
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return raw.split("\\n").filter(Boolean).slice(-boundedLimit).reverse().map((line) => {
+  return raw.split("\n").filter(Boolean).slice(-boundedLimit).reverse().map((line) => {
     const record = JSON.parse(line) as AuditRecord;
     const details = Object.fromEntries(Object.entries(record.details ?? {}).filter(([key]) =>
       !/(nonce|signature|token|private.?key|seed|proof|secret|credential)/i.test(key)
