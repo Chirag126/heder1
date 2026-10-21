@@ -2,7 +2,7 @@
 
 ## Implementation status
 
-The multi-service deterministic runner is implemented in this branch, but Phase 10 is **not acceptance-complete until local tests, typecheck/build, and a real Hedera Testnet payment to the selected service are verified**.
+The multi-service deterministic runner is implemented and a local wallet-authorized Hedera Testnet run completed successfully according to the API response on 2026-10-21. The API reported a 0.0005 HBAR settlement to the selected short-summary service and returned a transaction ID. Final acceptance still requires independent HashScan verification, matching audit/HCS verification, and a fresh local test/typecheck/build pass.
 
 The runner adds a code-reviewed service registry with two local testnet endpoints, reads each service's actual HTTP 402 requirements, chooses the cheapest eligible offer deterministically, reserves the chosen spend through the persistent firewall, executes one bounded x402 payment, validates the returned settlement receipt, and reports actual expenditure.
 
@@ -119,7 +119,7 @@ pnpm build
 pnpm typecheck
 ```
 
-The automated suite tests registry policy, per-service prices, firewall reservations, authorization-scope separation, cancellation handling, and a no-eligible-service API run. It does not prove that a live testnet payment succeeded. Phase 10's final acceptance still requires a local run that pays the selected 0.0005 HBAR summary service and a verified HashScan receipt.
+The automated suite tests registry policy, per-service prices, firewall reservations, authorization-scope separation, cancellation handling, and a no-eligible-service API run. It does not prove that a live testnet payment succeeded. A live local run on 2026-10-21 returned `status: completed`, selected `heder1-short-summary`, reported `payment.status: settled`, and returned transaction ID `0.0.7162784@1792621688.152704457` for 50,000 tinybars (0.0005 HBAR). See the README's Phase 10 live-run evidence section. The operator must independently confirm HashScan success and match the relevant local audit event to its HCS anchor before marking every acceptance check complete.
 
 ## Remaining limitation
 
