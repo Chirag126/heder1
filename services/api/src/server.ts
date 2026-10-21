@@ -237,6 +237,7 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   } finally {
     agentV2Runs.delete(runId);
     agentV2CompletedRuns.add(runId);
+    if (agentV2CompletedRuns.size > 1000) agentV2CompletedRuns.delete(agentV2CompletedRuns.values().next().value as string);
   }
 });
 
