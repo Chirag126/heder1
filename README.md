@@ -587,7 +587,7 @@ Set `HEDERA_AGENT_V2_ENABLED=true` only for local Hedera Testnet testing. Keep p
 
 ### Phase 10 live run evidence — 2026-10-21
 
-**Payment verification: PASS — the operator confirmed HashScan success and the public Hedera Testnet Mirror Node returned `SUCCESS` with matching 50,000-tinybar transfer details. The specific Phase 10 HCS audit-anchor match is still pending.**
+**Phase 10 evidence checks: PASS for on-chain payment and both HCS audit anchors.** The operator confirmed HashScan success; the public Hedera Testnet Mirror Node returned `SUCCESS` with the expected 50,000-tinybar transfer. The local audit chain validates, and the API's HCS verification endpoint returned `valid: true` for both the `payment.settled` and `agent.run_finished` audit hashes.
 
 | Check | Observed result |
 |---|---|
@@ -612,7 +612,7 @@ Evidence links:
 
 If you save the run response locally as `evidence/phase-10/successful-agent-run.json`, inspect it before committing and confirm it contains no secrets, signatures, authorization tokens, or payment proofs.
 
-**Payment verification is complete:** the operator confirmed HashScan shows success, and the public Mirror Node response reports `SUCCESS`, the expected 50,000-tinybar transfer from `0.0.11044318` to `0.0.11044329`, and a separate 234,000-tinybar network fee charged to `0.0.7162784`. This confirms the on-chain payment transfer. **Audit verification remains open:** locate the matching local `payment.settled` and `agent.run_finished` records and verify the specific audit hash against its HCS anchor before declaring the full Phase 10 evidence chain complete.
+**Payment and audit verification are complete for this recorded run:** HashScan showed success and the public Mirror Node returned `SUCCESS`, with 50,000 tinybars transferred from `0.0.11044318` to `0.0.11044329`; the 234,000-tinybar network fee was charged separately to `0.0.7162784`. The local audit status returned `valid: true` for 153 records. HCS verification returned `valid: true` with exact expected/anchored hash equality for `payment.settled` (audit sequence 152, topic `0.0.11115485`, message 24) and `agent.run_finished` (audit sequence 153, same topic, message 25). This establishes the local record-to-HCS hash match for both events.
 
 PowerShell audit inspection (local API must be running):
 
@@ -630,3 +630,12 @@ Invoke-RestMethod http://127.0.0.1:4000/api/audit/anchors |
 Use the matching anchor's `topicId`, `sequenceNumber`, and `auditRecordHash` to verify it via the API or public Mirror Node. The verification API is documented above as `GET /api/audit/verify-hcs?topicId=...&sequenceNumber=...&auditHash=...`.
 
 The transaction above is the reported x402 payment. An HCS `SUBMIT MESSAGE` transaction is a separate audit-anchor transaction and must not be represented as the payment itself. Local hash-chain integrity, HCS hash matching, and payment settlement are three separate checks.
+
+
+HCS verification evidence for the Phase 10 run:
+
+- `payment.settled`: audit sequence 152; HCS topic `0.0.11115485`, message sequence 24; expected and anchored hash both `cd6e1cbd721d8b68ef882af992a9948c3cfc2b678ca785473ae7dc4b037ff2b4`. [Public HCS message 24](https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/24).
+- `agent.run_finished`: audit sequence 153; HCS topic `0.0.11115485`, message sequence 25; expected and anchored hash both `6508b4d231d14b70155d125ac837c531ef82690253a9cd4a97e12cf255e8f2f6`. [Public HCS message 25](https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/25).
+- Local audit endpoint reported `valid: true`, 153 records, and head hash equal to the final `agent.run_finished` hash.
+
+The HCS anchor is a separate consensus message, not the x402 payment transaction. These checks support the evidence for this specific Testnet run; they do not establish production readiness or protection from a host that can rewrite local files before anchoring.
