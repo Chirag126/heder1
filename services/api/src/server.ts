@@ -13,7 +13,7 @@ const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
 const configuredOrigins = (process.env.HEDERA_CORS_ORIGINS ?? "")
   .split(",")
-  .map((origin) => origin.trim().replace(/\\/$/, ""))
+  .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
 const allowedOrigins = new Set([
   ...configuredOrigins,
@@ -24,7 +24,7 @@ const allowedOrigins = new Set([
 app.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
   if (origin) {
-    const normalizedOrigin = origin.replace(/\\/$/, "");
+    const normalizedOrigin = origin.replace(/\/$/, "");
     if (!allowedOrigins.has(normalizedOrigin)) {
       return reply.code(403).send({ error: "Origin is not allowed by the API CORS policy." });
     }
