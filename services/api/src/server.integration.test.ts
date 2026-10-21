@@ -141,11 +141,10 @@ test("Phase 10 stops through the API without paying when every 402 quote exceeds
     assert.equal(fetchCalls, 2, "only the two unpaid discovery requests should run; no paid retry or facilitator call");
   } finally {
     globalThis.fetch = previousFetch;
-    process.env.HEDERA_AGENT_V2_ENABLED = "false";
-    delete process.env.HEDERA_CLIENT_ACCOUNT_ID;
-    delete process.env.HEDERA_CLIENT_PRIVATE_KEY;
-    delete process.env.HEDERA_RECEIVER_ACCOUNT_ID;
-    delete process.env.HEDERA_X402_FACILITATOR_URL;
+    for (const key of ["HEDERA_AGENT_V2_ENABLED", "HEDERA_NETWORK", "HEDERA_CLIENT_ACCOUNT_ID", "HEDERA_CLIENT_PRIVATE_KEY", "HEDERA_RECEIVER_ACCOUNT_ID", "HEDERA_X402_FACILITATOR_URL"]) {
+      if (key in originalEnv) process.env[key] = originalEnv[key]!;
+      else delete process.env[key];
+    }
   }
 });
 
