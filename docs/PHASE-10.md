@@ -78,7 +78,7 @@ Execute the example goal:
 curl -X POST http://127.0.0.1:4000/api/agent/v2/run ^
   -H "content-type: application/json" ^
   -H "x-heder1-authorization: YOUR_SHORT_LIVED_PHASE_10_TOKEN" ^
-  -d "{\"goal\":\"Find the cheapest approved source for a short report and return its receipt\",\"budgetTinybars\":500000,\"maxPaidCalls\":3}"
+  -d "{\"runId\":\"RUN_ID_FROM_POWERSHELL\",\"goal\":\"Find the cheapest approved source for a short report and return its receipt\",\"budgetTinybars\":500000,\"maxPaidCalls\":3}"
 ```
 
 A successful response includes the selected service, actual amount, result, total reserved expenditure, and a HashScan transaction receipt. Verify the transaction independently on HashScan Testnet.
@@ -92,7 +92,7 @@ While the run request is still active in the first terminal, request cancellatio
 ```cmd
 curl -X POST http://127.0.0.1:4000/api/agent/v2/cancel ^
   -H "content-type: application/json" ^
-  -d "{\"runId\":\"RUN_ID_FROM_RESPONSE_OR_CLIENT_TRACKING\"}"
+  -d "{\"runId\":\"RUN_ID_FROM_POWERSHELL\"}"
 ```
 
 Cancellation aborts in-flight HTTP requests and prevents later steps from proceeding. Cancellation cannot reverse a blockchain settlement that has already been submitted; check the final receipt and transaction status. Run IDs and cancellation state are process-local, so restarting the API stops all in-flight runs.
