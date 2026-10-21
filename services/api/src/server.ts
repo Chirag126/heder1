@@ -8,7 +8,7 @@ import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthoriz
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
-const app = Fastify({ logger: true, bodyLimit: 16_384 });
+export const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
 // Bind to localhost by default because the opt-in demo endpoint can transfer testnet HBAR.
 const host = process.env.HOST ?? "127.0.0.1";
@@ -226,4 +226,5 @@ async function start() {
   try { await app.listen({ port, host }); }
   catch (error) { app.log.error(error); process.exit(1); }
 }
-void start();
+// Export the Fastify instance for safe in-process integration tests.
+if (process.env.NODE_ENV !== "test") void start();
