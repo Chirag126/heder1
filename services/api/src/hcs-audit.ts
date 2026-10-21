@@ -1,4 +1,6 @@
 import { AccountId, Client, PrivateKey, TopicMessageSubmitTransaction } from "@hiero-ledger/sdk";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 export type HcsAnchor = {
   network: "testnet";
@@ -44,7 +46,7 @@ export async function anchorAuditRecord(input: { sequence: number; hash: string 
     if (!Number.isSafeInteger(sequenceNumber) || sequenceNumber < 1) {
       throw new Error("HCS submission succeeded without a usable topic sequence number.");
     }
-    return {
+    const anchor: HcsAnchor = {
       network: "testnet",
       topicId: config.topicId,
       sequenceNumber,
@@ -53,9 +55,24 @@ export async function anchorAuditRecord(input: { sequence: number; hash: string 
       auditRecordHash: input.hash,
       mirrorNodeUrl: `https://testnet.mirrornode.hedera.com/api/v1/topics/${config.topicId}/messages/${sequenceNumber}`,
     };
+    const indexPath = resolve(process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ?? "./data/audit-anchors.jsonl");
+    await mkdir(dirname(indexPath), { recursive: true });
+    await appendFile(indexPath, JSON.stringify(anchor) + "\n", { encoding: "utf8", mode: 0o600, flag: "a" });
+    return anchor;
   } finally {
     client.close();
   }
+}
+
+export async function listHcsAnchors(): Promise<HcsAnchor[]> {
+  const path = resolve(process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ?? "./data/audit-anchors.jsonl");
+  let raw: string;
+  try { raw = await readFile(path, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line) as HcsAnchor);
 }
 
 export async function verifyHcsAnchor(input: { topicId: string; sequenceNumber: number; expectedAuditHash: string }) {
