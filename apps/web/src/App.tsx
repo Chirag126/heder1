@@ -26,7 +26,10 @@ export default function App() {
   const [walletChain, setWalletChain] = useState("");
   const [walletMessage, setWalletMessage] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const [permissionApproved, setPermissionApproved] = useState(false);\n  const [authorizationToken, setAuthorizationToken] = useState("");\n  const [authorizing, setAuthorizing] = useState(false);\n  const [agentRunning, setAgentRunning] = useState(false);
+  const [permissionApproved, setPermissionApproved] = useState(false);
+  const [authorizationToken, setAuthorizationToken] = useState("");
+  const [authorizing, setAuthorizing] = useState(false);
+  const [agentRunning, setAgentRunning] = useState(false);
 
   async function checkBackend() {
     setChecking(true); setError("");
