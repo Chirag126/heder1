@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–7 are implemented. Phase 8 includes a Render deployment Blueprint and production CORS configuration; public hosting still requires an operator to create the Render services and verify their URLs. The HCS testnet verification described below succeeded for the documented topic message. This remains a prototype, not production-ready payment infrastructure.
+> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -25,6 +25,8 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 6: live product dashboard](#phase-6-live-product-dashboard)
 - [Phase 7: testing and security hardening](#phase-7-testing-and-security-hardening)
 - [Phase 8: public deployment](#phase-8-public-deployment)
+- [Phase 9: settlement receipt validation](#phase-9-settlement-receipt-validation)
+- [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -500,7 +502,34 @@ The agent also requires the returned resource identifier to equal `heder1-demo-r
 4. Open the returned HashScan Testnet link and independently check successful status, payer/receiver, and the 0.001 HBAR transfer.
 5. Confirm the matching `payment.settled` and `agent.run_finished` records appear in local audit history.
 
-Do not mark the live acceptance gate complete from unit tests or HCS hash verification alone. Never commit `.env`, private keys, payment signatures, or other credentials.
+### Phase 9 live acceptance evidence
+
+**Result: PASS — Hedera Testnet live acceptance completed on 2026-10-22.**
+
+The following evidence was checked after running the local, wallet-authorized agent flow:
+
+| Check | Observed result |
+|---|---|
+| Unpaid protected-resource request | HTTP 402 challenge returned before payment |
+| Agent result | HTTP 200; decision approved; settlement status `settled` |
+| Protected resource | `heder1-demo-report` |
+| x402 settlement transaction | `0.0.7162784@1792616089.538653745` |
+| Settlement amount | 100,000 tinybars = 0.001 HBAR |
+| Receiver | `0.0.11044329` |
+| Independent transaction check | HashScan Testnet showed SUCCESS and the transfer details matched the audit receipt |
+| Local audit chain | `valid: true`; 123 records; head hash `eed489f668beffe7add343788422ff1b7adc213988f4ad1215b4a5e78b6ac2a3` |
+| Settlement audit records | `payment.settled` sequence #122 and `agent.run_finished` sequence #123 referenced the same settlement transaction |
+| HCS anchors | 13 indexed anchors for topic `0.0.11115485`; the user confirmed anchor and hash verification succeeded |
+
+Evidence links:
+
+- [Verified x402 settlement on HashScan Testnet](https://hashscan.io/testnet/transaction/0.0.7162784%401792616089.538653745)
+- [HCS topic message 13 on the public Mirror Node](https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/13)
+- [HCS topic message 12 on the public Mirror Node](https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/12)
+
+**Evidence boundaries:** The HashScan transaction above is the x402 payment settlement transaction. HCS `SUBMIT MESSAGE` transactions are separate anchoring transactions and must not be presented as the payment itself. The local audit endpoint reported `independentlyAnchored: false`; this describes the local hash-chain status response and does not negate the separately verified HCS topic messages. Local hash-chain validity, HCS hash matching, and on-chain payment settlement are distinct checks.
+
+**Safety remains unchanged:** keep public Render agent/payment execution disabled. Never commit `.env`, private keys, wallet signatures, payment proofs, or other credentials. This acceptance result is for Hedera Testnet only and is not a mainnet approval or production security audit.
 
 Useful checks:
 
