@@ -491,6 +491,17 @@ Automated unit tests cover a valid settlement receipt, missing receipt, non-sett
 - This change makes the agent require and surface the resource's settlement receipt. It does **not** claim that a new live testnet payment has been executed as part of this code change.
 - Before marking Phase 9 fully verified, run the local integration flow with dedicated testnet credentials, confirm the facilitator returns a transaction ID, and independently verify the transaction on HashScan.
 
+The agent also requires the returned resource identifier to equal `heder1-demo-report`; an arbitrary non-empty resource string is not accepted as successful delivery. The HCS anchor list is separate audit evidence and does not satisfy the x402 settlement acceptance gate.
+
+**Live acceptance checklist (local testnet only):**
+1. With a dedicated Hedera Testnet payer configured only in `services/api/.env`, confirm `/api/x402/paid-resource` returns HTTP 402 before payment.
+2. Authorize one agent invocation with a Hedera Testnet EVM wallet, then run the agent once.
+3. Confirm the response reports `settlement.status = "settled"`, resource `heder1-demo-report`, and a non-empty transaction ID.
+4. Open the returned HashScan Testnet link and independently check successful status, payer/receiver, and the 0.001 HBAR transfer.
+5. Confirm the matching `payment.settled` and `agent.run_finished` records appear in local audit history.
+
+Do not mark the live acceptance gate complete from unit tests or HCS hash verification alone. Never commit `.env`, private keys, payment signatures, or other credentials.
+
 Useful checks:
 
 ```bash
