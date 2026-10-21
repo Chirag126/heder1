@@ -4,6 +4,7 @@ import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
+import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -51,6 +52,23 @@ app.get("/api/x402/status", async (_request, reply) => {
 app.get("/api/x402/paid-resource", handlePaidResource);
 
 
+/** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
+app.post<{ Body: { account?: string; chainId?: number } }>("/api/authorization/challenge", async (request, reply) => {
+  if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
+  if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
+  try { return createAuthorizationChallenge(request.body.account); }
+  catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid wallet account." }); }
+});
+
+/** Verify an EIP-191 personal_sign signature and issue a short-lived, single-use grant. */
+app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/verify", async (request, reply) => {
+  if (typeof request.body?.nonce !== "string" || typeof request.body?.signature !== "string") {
+    return reply.code(400).send({ error: "Challenge nonce and wallet signature are required." });
+  }
+  try { return await verifyAuthorizationChallenge({ nonce: request.body.nonce, signature: request.body.signature }); }
+  catch (error) { return reply.code(401).send({ error: error instanceof Error ? error.message : "Wallet authorization failed." }); }
+});
+
 /** Phase 2 agent status: reports policy/config only; never initiates a payment. */
 app.get("/api/agent/status", async () => ({
   enabled: isAgentEnabled(),
@@ -76,9 +94,14 @@ app.post("/api/agent/run", async (request, reply) => {
       hint: "For local testnet development only, set HEDERA_AGENT_ENABLED=true and HEDERA_NETWORK=testnet.",
     });
   }
+  const token = request.headers["x-heder1-authorization"];
+  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
+  if (!authorization.allowed) {
+    return reply.code(401).send({ error: authorization.reason, hint: "Connect a Hedera Testnet wallet and approve one agent invocation in the dashboard." });
+  }
   try {
     const result = await runPaymentAgent();
-    return reply.code(result.response.status).send(result);
+    return reply.code(result.response.status).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {
     request.log.error({ err: error }, "autonomous x402 payment agent failed");
     return reply.code(502).send({
