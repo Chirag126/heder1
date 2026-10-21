@@ -475,6 +475,30 @@ These commands test the API and validate types/builds. They do not independently
 
 For a payment demo, verify the returned transaction on HashScan. For HCS anchoring, inspect the public Mirror Node message and confirm that the expected audit hash matches.
 
+## Phase 9: settlement receipt validation
+
+Phase 9 hardens the agent's success criteria. A successful HTTP status by itself is not enough for Heder1 to report a paid-resource task as successful. The agent now requires the protected resource response to contain an explicit settlement receipt with `payment.status: "settled"`, a non-empty transaction ID, and the expected resource identifier.
+
+When present, the agent returns a normalized settlement object with the transaction ID, settlement timestamp when provided, and a HashScan Testnet transaction URL. The agent completion audit event includes the settlement status and transaction reference so the dashboard's sanitized audit history can expose the receipt without storing payment signatures or private credentials.
+
+Automated unit tests cover a valid settlement receipt, missing receipt, non-settled status, missing protected resource, and non-2xx response. These tests use local fixtures and do not make real payments.
+
+### Phase 9 scope and verification status
+
+- The existing x402 v2 client/resource-server flow is retained; this phase does not replace it wholesale with middleware.
+- Existing facilitator capability discovery, fixed testnet payment requirements, proof validation, facilitator verification/settlement, and withholding the protected resource on settlement failure remain in place.
+- The agent is still restricted to the exact loopback testnet resource and a fixed 0.001 HBAR cap. It remains disabled by default and refuses execution in production.
+- This change makes the agent require and surface the resource's settlement receipt. It does **not** claim that a new live testnet payment has been executed as part of this code change.
+- Before marking Phase 9 fully verified, run the local integration flow with dedicated testnet credentials, confirm the facilitator returns a transaction ID, and independently verify the transaction on HashScan.
+
+Useful checks:
+
+```bash
+pnpm --filter @heder1/api test
+pnpm typecheck
+pnpm build
+```
+
 ## Limitations and future work
 
 The current implementation is a testnet prototype. Important remaining hardening work includes:
