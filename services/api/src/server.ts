@@ -180,6 +180,7 @@ app.get("/api/agent/status", async () => ({
 // Phase 10 cancellation is process-local and run IDs are unguessable UUIDs.
 // Restarting the API cancels all in-flight work.
 const agentV2Runs = new Map<string, AbortController>();
+const agentV2CompletedRuns = new Set<string>();
 
 app.get("/api/agent/v2/status", async () => ({
   enabled: isAgentV2Enabled(),
@@ -210,7 +211,7 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   const input = request.body ?? ({} as AgentV2TaskInput & { runId?: string });
   const runId = input.runId;
   if (typeof runId !== "string" || !/^[0-9a-f-]{36}$/i.test(runId)) return reply.code(400).send({ error: "A client-generated UUID runId is required so the task can be cancelled while active." });
-  if (agentV2Runs.has(runId)) return reply.code(409).send({ error: "That runId is already active." });
+  if (agentV2Runs.has(runId) || agentV2CompletedRuns.has(runId)) return reply.code(409).send({ error: "That runId has already been used." });
   if (typeof input.goal !== "string" || !input.goal.trim() || input.goal.length > 2000) return reply.code(400).send({ error: "goal is required and must be at most 2000 characters." });
   if (input.budgetTinybars !== undefined && typeof input.budgetTinybars !== "number") return reply.code(400).send({ error: "budgetTinybars must be a number." });
   if (input.maxPaidCalls !== undefined && typeof input.maxPaidCalls !== "number") return reply.code(400).send({ error: "maxPaidCalls must be a number." });
@@ -235,6 +236,7 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
     return reply.code(status).send({ runId, agent: "heder1-autonomous-agent-v2", status: "stopped-safely", error: reason, paymentAttempted: /No approved service|No registered service|No advertised/i.test(reason) ? false : undefined });
   } finally {
     agentV2Runs.delete(runId);
+    agentV2CompletedRuns.add(runId);
   }
 });
 
