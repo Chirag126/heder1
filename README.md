@@ -184,3 +184,21 @@ The API now records wallet authorization challenges and grants, authorization re
 - The file is serialized within one Node.js process. It is **not multi-process/multi-host safe**, and an operator with write access can delete or replace the file. The local hash chain is tamper-evident for edits that are checked against the retained chain, but it is not an independent external anchor.
 - **Hedera Consensus Service (HCS) anchoring is not enabled in this change.** To claim independent evidence, a follow-up should publish audit record hashes to a configured HCS topic using a separately controlled testnet operator, retain HCS sequence/consensus timestamps, and test verification against a Mirror Node. Do not claim HCS logging or independent anchoring until that integration is implemented and verified.
 - Do not deploy this local audit store publicly as a production audit system. A durable transactional store, access controls, retention/export policy, and optional HCS anchoring require separate review.
+
+
+### Phase 5 follow-up — optional HCS anchoring and Mirror Node verification
+
+Optional Hedera Consensus Service anchoring is now implemented behind an explicit opt-in. When `HEDERA_AUDIT_HCS_ENABLED=true`, each local audit record's SHA-256 hash is submitted as a compact JSON message to the configured Hedera **Testnet** topic. The local event itself remains in the JSONL file; only its hash and minimal sequence metadata are anchored on-chain. This incurs HCS transaction fees and should use a dedicated, least-privilege testnet operator.
+
+Required settings:
+- `HEDERA_AUDIT_HCS_ENABLED=true`
+- `HEDERA_AUDIT_HCS_TOPIC_ID=0.0.x` (a topic you created and control)
+- `HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID` and `HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY` (dedicated testnet operator recommended; if blank, the existing x402 payer credentials are used)
+
+The feature is disabled by default. With it disabled, normal local audit behavior remains unchanged. When enabled, each audit append attempts a separate HCS message, so authorization and payment-related events can create multiple HCS transactions. If HCS submission fails, the local record may already be persisted; treat the operation as requiring reconciliation rather than assuming no event was recorded.
+
+To verify a published anchor independently, call:
+`GET /api/audit/verify-hcs?topicId=0.0.x&sequenceNumber=123&auditHash=<64-character-record-hash>`.
+The API queries the public Hedera Testnet Mirror Node and compares the decoded message with the expected audit hash. The response includes the Mirror Node URL for independent inspection. The caller must obtain the audit record hash and HCS topic sequence number from the submission response/logs or the public topic messages; do not treat a local API response alone as proof.
+
+Automated tests cover matching and mismatching Mirror Node messages without submitting a real HCS transaction. A live end-to-end anchor has not been run by CI. Before claiming a verified live deployment, configure a testnet topic/operator, submit one harmless test anchor, and independently confirm the message on the public Mirror Node.
