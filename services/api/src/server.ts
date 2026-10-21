@@ -5,7 +5,7 @@ import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
-import { appendAuditEvent, verifyAuditTrail } from "./audit-trail.js";
+import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
@@ -91,6 +91,22 @@ app.get("/api/audit/status", async (_request, reply) => {
     return { ...verification, ledger: "local-jsonl-hash-chain", independentlyAnchored: false, note: "Local hash-chain validation only. This is not an HCS anchor or proof against deletion by the host." };
   } catch (error) {
     return reply.code(500).send({ valid: false, error: error instanceof Error ? error.message : "Could not verify audit trail." });
+  }
+});
+
+/** Sanitized, bounded audit history for the product dashboard. */
+app.get<{ Querystring: { limit?: string } }>("/api/audit/records", async (request, reply) => {
+  const requested = Number(request.query.limit ?? 25);
+  if (!Number.isInteger(requested) || requested < 1 || requested > 100) {
+    return reply.code(400).send({ error: "limit must be an integer from 1 to 100." });
+  }
+  try {
+    const records = await listAuditRecords(requested);
+    return { records };
+  } catch (error) {
+    return reply.code(500).send({
+      error: error instanceof Error ? error.message : "Could not read audit history.",
+    });
   }
 });
 
