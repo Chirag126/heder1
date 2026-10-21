@@ -1,10 +1,6 @@
 /**
- * Phase 10 deterministic planning primitives.
- *
- * This module is intentionally side-effect free: it never fetches URLs, signs
- * payments, or holds credentials. Network discovery and payment execution must
- * call these policy functions and remain behind the existing authorization and
- * spending firewall.
+ * Phase 10 deterministic planning and registry policy.
+ * This module never fetches URLs, signs payments, or holds credentials.
  */
 export type ApprovedService = {
   id: string;
@@ -14,6 +10,8 @@ export type ApprovedService = {
   assetTypes: readonly string[];
   trust: "approved" | "blocked";
   allowed: boolean;
+  expectedResource?: string;
+  priceMetadata?: { amountTinybars: string; asset: "HBAR"; source: "informational-hint-only" };
 };
 
 export type AgentV2Limits = {
@@ -35,7 +33,7 @@ export type PaymentRequirement = {
 };
 
 export const DEFAULT_AGENT_V2_LIMITS: Readonly<AgentV2Limits> = Object.freeze({
-  budgetTinybars: 500_000, // 0.005 HBAR
+  budgetTinybars: 500_000,
   maxPaidCalls: 3,
   maxSteps: 8,
   maxRuntimeMs: 45_000,
@@ -45,7 +43,6 @@ export const DEFAULT_AGENT_V2_LIMITS: Readonly<AgentV2Limits> = Object.freeze({
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-/** URLs are checked structurally; callers must still match the full URL to a registry entry. */
 export function isSafeRegisteredUrl(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl);
@@ -59,9 +56,39 @@ export function isSafeRegisteredUrl(rawUrl: string): boolean {
   }
 }
 
+/** Explicit, code-reviewed local test registry. No model-supplied URLs are accepted. */
+export function getApprovedServiceRegistry(): ApprovedService[] {
+  return [
+    {
+      id: "heder1-full-report",
+      url: "http://127.0.0.1:4000/api/x402/paid-resource",
+      description: "Full demo report with settlement receipt.",
+      networks: ["hedera:testnet"],
+      assetTypes: ["HBAR"],
+      trust: "approved",
+      allowed: true,
+      expectedResource: "heder1-demo-report",
+      priceMetadata: { amountTinybars: "100000", asset: "HBAR", source: "informational-hint-only" },
+    },
+    {
+      id: "heder1-short-summary",
+      url: "http://127.0.0.1:4000/api/x402/summary",
+      description: "Short summary report with settlement receipt.",
+      networks: ["hedera:testnet"],
+      assetTypes: ["HBAR"],
+      trust: "approved",
+      allowed: true,
+      expectedResource: "heder1-short-summary",
+      priceMetadata: { amountTinybars: "50000", asset: "HBAR", source: "informational-hint-only" },
+    },
+  ];
+}
+
 export function validateAgentV2Limits(limits: AgentV2Limits): string[] {
   const errors: string[] = [];
-  if (!Number.isSafeInteger(limits.budgetTinybars) || limits.budgetTinybars < 0) errors.push("budgetTinybars must be a non-negative safe integer.");
+  if (!Number.isSafeInteger(limits.budgetTinybars) || limits.budgetTinybars < 0 || limits.budgetTinybars > 500_000) {
+    errors.push("budgetTinybars must be a non-negative safe integer no greater than 500000 (0.005 HBAR).");
+  }
   for (const [key, value] of Object.entries({
     maxPaidCalls: limits.maxPaidCalls,
     maxSteps: limits.maxSteps,
@@ -70,19 +97,15 @@ export function validateAgentV2Limits(limits: AgentV2Limits): string[] {
   })) {
     if (!Number.isSafeInteger(value) || value < 0) errors.push(`${key} must be a non-negative safe integer.`);
   }
-  if (!Number.isSafeInteger(limits.maxRuntimeMs) || limits.maxRuntimeMs < 1 || limits.maxRuntimeMs > 120_000) {
-    errors.push("maxRuntimeMs must be between 1 and 120000.");
+  if (!Number.isSafeInteger(limits.maxRuntimeMs) || limits.maxRuntimeMs < 1 || limits.maxRuntimeMs > 45_000) {
+    errors.push("maxRuntimeMs must be between 1 and 45000.");
   }
-  if (limits.maxPaidCalls > 10 || limits.maxSteps > 20 || limits.maxRetries > 3 || limits.maxAttemptsPerService > 3) {
-    errors.push("Requested limits exceed the hard safety ceilings.");
+  if (limits.maxPaidCalls > 3 || limits.maxSteps > 8 || limits.maxRetries > 1 || limits.maxAttemptsPerService > 1) {
+    errors.push("Requested limits exceed the Phase 10 hard safety ceilings.");
   }
   return errors;
 }
 
-/**
- * Parses x402 v2 challenge JSON. The returned amounts are only advertised
- * requirements, not authorization; the deterministic policy must check them.
- */
 export function parseX402Requirements(body: unknown): PaymentRequirement[] {
   if (!body || typeof body !== "object" || Array.isArray(body)) return [];
   const record = body as Record<string, unknown>;
@@ -110,7 +133,6 @@ export type EligibleCandidate = {
   amountTinybars: number;
 };
 
-/** The policy engine, never a model, makes the final eligibility decision. */
 export function selectCheapestEligibleService(input: {
   services: readonly ApprovedService[];
   requirementsByService: ReadonlyMap<string, readonly PaymentRequirement[]>;
@@ -136,9 +158,10 @@ export function selectCheapestEligibleService(input: {
       (!input.allowedReceiverIds || input.allowedReceiverIds.includes(r.payTo)) &&
       Number.isSafeInteger(Number(r.amount)) &&
       Number(r.amount) > 0 &&
-      Number(r.amount) <= input.budgetTinybars
+      Number(r.amount) <= input.budgetTinybars &&
+      Number(r.amount) <= 100_000
     );
-    if (!candidates.length) { reject("No advertised x402 requirement fits network, asset, receiver, and budget policy."); continue; }
+    if (!candidates.length) { reject("No advertised x402 requirement fits network, asset, receiver, per-payment cap, and budget policy."); continue; }
     candidates.sort((a, b) => Number(a.amount) - Number(b.amount));
     const requirement = candidates[0]!;
     eligible.push({ service, requirement, amountTinybars: Number(requirement.amount) });
@@ -167,6 +190,9 @@ export const agentV2Policy = Object.freeze({
   paymentAsset: "0.0.0",
   defaultBudgetTinybars: DEFAULT_AGENT_V2_LIMITS.budgetTinybars,
   defaultBudgetHbar: "0.005",
+  maxPaidCalls: 3,
+  maxSteps: 8,
+  maxRuntimeMs: 45_000,
   modelCanFetchArbitraryUrls: false,
   modelCanAuthorizePayments: false,
   note: "Discovery and ranking are advisory; deterministic policy and the spending firewall authorize every payment.",
