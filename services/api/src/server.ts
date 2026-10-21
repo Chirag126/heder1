@@ -55,6 +55,13 @@ app.get("/api/agent/status", async () => ({
   enabled: isAgentEnabled(),
   policy: paymentAgentPolicy,
   targetConfigured: Boolean(process.env.HEDERA_X402_PAID_RESOURCE_URL),
+  spendingFirewall: {
+    maxPaymentTinybars: String(FIREWALL_MAX_PAYMENT_TINYBARS),
+    dailyBudgetTinybars: String(FIREWALL_DAILY_BUDGET_TINYBARS),
+    maxAttemptsPerUtcDay: FIREWALL_MAX_ATTEMPTS_PER_DAY,
+    ledger: "persistent-local-json",
+    multiInstanceSafe: false,
+  },
 }));
 
 /**
