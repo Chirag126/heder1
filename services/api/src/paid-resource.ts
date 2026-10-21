@@ -4,12 +4,27 @@ import { getX402Configuration } from "./x402.js";
 import { appendAuditEvent } from "./audit-trail.js";
 
 type JsonRecord = Record<string, unknown>;
-const AMOUNT_TINYBARS = "100000"; // Spending policy: fixed 0.001 HBAR per resource request.
-const RESOURCE_BODY = {
+type ServiceDefinition = {
+  path: string;
+  resource: string;
+  description: string;
+  amountTinybars: string;
+  message: string;
+};
+
+const FULL_REPORT: ServiceDefinition = {
+  path: "/api/x402/paid-resource",
   resource: "heder1-demo-report",
+  description: "Access to the heder1 demo report; fixed testnet price 0.001 HBAR.",
+  amountTinybars: "100000",
   message: "Access granted after x402 payment verification and settlement.",
-  network: "hedera:testnet",
-  amountHbar: "0.001",
+};
+const SHORT_SUMMARY: ServiceDefinition = {
+  path: "/api/x402/summary",
+  resource: "heder1-short-summary",
+  description: "Access to the heder1 short summary; fixed testnet price 0.0005 HBAR.",
+  amountTinybars: "50000",
+  message: "Short report: the least expensive approved heder1 test service returned this summary after settlement.",
 };
 const settled = new Map<string, { transaction: string; settledAt: string }>();
 const inFlight = new Map<string, Promise<{ transaction: string; settledAt: string }>>();
@@ -26,8 +41,6 @@ function decodePaymentHeader(value: string): JsonRecord {
   } catch {
     throw new Error("Payment proof must be a base64-encoded x402 v2 JSON payload.");
   }
-  // x402 v2 puts scheme/network inside the "accepted" requirements object.
-  // The v1 top-level scheme/network fields are not part of the v2 payload shape.
   const accepted = isRecord(parsed) && isRecord(parsed.accepted) ? parsed.accepted : null;
   if (!isRecord(parsed) || parsed.x402Version !== 2 || !accepted ||
       accepted.scheme !== "exact" || accepted.network !== "hedera:testnet") {
@@ -36,11 +49,11 @@ function decodePaymentHeader(value: string): JsonRecord {
   return parsed;
 }
 
-function makeRequirements(receiverAccountId: string, feePayer: string) {
+function makeRequirements(receiverAccountId: string, feePayer: string, service: ServiceDefinition) {
   return {
     scheme: "exact",
     network: "hedera:testnet",
-    amount: AMOUNT_TINYBARS,
+    amount: service.amountTinybars,
     payTo: receiverAccountId,
     maxTimeoutSeconds: 300,
     asset: "0.0.0",
@@ -92,94 +105,96 @@ async function settleOnce(key: string, paymentPayload: JsonRecord, requirements:
   }
 }
 
-export async function handlePaidResource(request: FastifyRequest, reply: FastifyReply) {
-  let config;
-  try {
-    config = getX402Configuration();
-  } catch (error) {
-    return reply.code(503).send({ error: error instanceof Error ? error.message : "Invalid payment configuration." });
-  }
-  if (!config) return reply.code(503).send({ error: "Hedera testnet payer is not configured." });
+function makeHandler(service: ServiceDefinition) {
+  return async function handleService(request: FastifyRequest, reply: FastifyReply) {
+    let config;
+    try {
+      config = getX402Configuration();
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "Invalid payment configuration." });
+    }
+    if (!config) return reply.code(503).send({ error: "Hedera testnet payer is not configured." });
 
-  // Spending policy is intentionally immutable for Phase 1: testnet, HBAR only,
-  // 0.001 HBAR, one configured receiver, exact scheme, 5-minute timeout.
-  const baseUrl = config.facilitatorUrl.replace(/\/+$/, "");
-  let supported: JsonRecord;
-  try {
-    supported = await readFacilitatorJson(await fetch(`${baseUrl}/supported`, { signal: AbortSignal.timeout(10_000) }), "Facilitator capabilities");
-  } catch (error) {
-    return reply.code(503).send({ error: error instanceof Error ? error.message : "Facilitator unavailable." });
-  }
-  const kinds = Array.isArray(supported.kinds) ? supported.kinds.filter(isRecord) : [];
-  const kind = kinds.find((item) => item.network === "hedera:testnet" && item.scheme === "exact");
-  const extra = isRecord(kind?.extra) ? kind.extra : {};
-  const signers = isRecord(supported.signers) ? supported.signers : {};
-  const signerList = Array.isArray(signers["hedera:*"]) ? signers["hedera:*"] : [];
-  const feePayer = typeof extra.feePayer === "string" ? extra.feePayer : signerList.find((item): item is string => typeof item === "string");
-  if (!feePayer) return reply.code(503).send({ error: "Facilitator does not advertise an exact Hedera testnet fee payer." });
+    const baseUrl = config.facilitatorUrl.replace(/\/+$/, "");
+    let supported: JsonRecord;
+    try {
+      supported = await readFacilitatorJson(await fetch(`${baseUrl}/supported`, { signal: AbortSignal.timeout(10_000) }), "Facilitator capabilities");
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "Facilitator unavailable." });
+    }
+    const kinds = Array.isArray(supported.kinds) ? supported.kinds.filter(isRecord) : [];
+    const kind = kinds.find((item) => item.network === "hedera:testnet" && item.scheme === "exact");
+    const extra = isRecord(kind?.extra) ? kind.extra : {};
+    const signers = isRecord(supported.signers) ? supported.signers : {};
+    const signerList = Array.isArray(signers["hedera:*"]) ? signers["hedera:*"] : [];
+    const feePayer = typeof extra.feePayer === "string" ? extra.feePayer : signerList.find((item): item is string => typeof item === "string");
+    if (!feePayer) return reply.code(503).send({ error: "Facilitator does not advertise an exact Hedera fee payer." });
 
-  const requirements = makeRequirements(config.receiverAccountId, feePayer);
-  const challenge = {
-    x402Version: 2,
-    resource: {
-      url: "/api/x402/paid-resource",
-      description: "Access to the heder1 demo report; fixed testnet price 0.001 HBAR.",
-      mimeType: "application/json",
-      serviceName: "heder1",
-    },
-    accepts: [requirements],
-    extensions: {},
+    const requirements = makeRequirements(config.receiverAccountId, feePayer, service);
+    const challenge = {
+      x402Version: 2,
+      resource: {
+        url: service.path,
+        description: service.description,
+        mimeType: "application/json",
+        serviceName: "heder1",
+      },
+      accepts: [requirements],
+      extensions: {},
+    };
+    const paymentHeader = request.headers["payment-signature"] ?? request.headers["x-payment"];
+    if (typeof paymentHeader !== "string" || !paymentHeader) {
+      const encoded = Buffer.from(JSON.stringify(challenge)).toString("base64");
+      return reply.code(402).header("payment-required", encoded).header("cache-control", "no-store").send(challenge);
+    }
+
+    let paymentPayload: JsonRecord;
+    try {
+      paymentPayload = decodePaymentHeader(paymentHeader);
+      const accepted = paymentPayload.accepted as JsonRecord;
+      if (accepted.amount !== requirements.amount || accepted.payTo !== requirements.payTo ||
+          accepted.asset !== requirements.asset || accepted.network !== requirements.network ||
+          accepted.scheme !== requirements.scheme) {
+        throw new Error("Payment payload does not match this service's exact advertised requirements.");
+      }
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid payment proof." });
+    }
+
+    const key = createHash("sha256").update(service.path).update("\0").update(paymentHeader).digest("hex");
+    await appendAuditEvent({ event: "payment.attempted", outcome: "started", details: { proofHash: key, service: service.resource, amountTinybars: service.amountTinybars, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
+    try {
+      const result = await settleOnce(key, paymentPayload, requirements, baseUrl);
+      await appendAuditEvent({ event: "payment.settled", outcome: "settled", details: { proofHash: key, service: service.resource, transactionId: result.transaction, settledAt: result.settledAt, amountTinybars: service.amountTinybars, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
+      return reply.header("payment-response", Buffer.from(JSON.stringify({ success: true, transaction: result.transaction, network: "hedera:testnet" })).toString("base64"))
+        .header("cache-control", "no-store")
+        .send({
+          resource: service.resource,
+          message: service.message,
+          network: "hedera:testnet",
+          amountTinybars: service.amountTinybars,
+          amountHbar: Number(service.amountTinybars) / 100_000_000,
+          payment: { status: "settled", transaction: result.transaction, settledAt: result.settledAt },
+          explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(result.transaction)}`,
+        });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Payment verification or settlement failed.";
+      await appendAuditEvent({ event: "payment.rejected", outcome: "rejected", details: { proofHash: key, service: service.resource, reason, amountTinybars: service.amountTinybars, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
+      request.log.error({ err: error }, "x402 paid-resource payment failed");
+      return reply.code(402).send({ ...challenge, error: reason, note: "Resource withheld because successful settlement was not confirmed." });
+    }
   };
-  const paymentHeader = request.headers["payment-signature"] ?? request.headers["x-payment"];
-  if (typeof paymentHeader !== "string" || !paymentHeader) {
-    const encoded = Buffer.from(JSON.stringify(challenge)).toString("base64");
-    return reply
-      .code(402)
-      .header("payment-required", encoded)
-      .header("cache-control", "no-store")
-      .send(challenge);
-  }
-
-  let paymentPayload: JsonRecord;
-  try {
-    paymentPayload = decodePaymentHeader(paymentHeader);
-  } catch (error) {
-    return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid payment proof." });
-  }
-
-  // Enforce the advertised scheme/network; facilitator verification enforces
-  // the signed amount, destination, expiry, and chain-specific proof.
-  const key = createHash("sha256").update(paymentHeader).digest("hex");
-  await appendAuditEvent({ event: "payment.attempted", outcome: "started", details: { proofHash: key, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
-  try {
-    const result = await settleOnce(key, paymentPayload, requirements, baseUrl);
-    await appendAuditEvent({ event: "payment.settled", outcome: "settled", details: { proofHash: key, transactionId: result.transaction, settledAt: result.settledAt, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
-    return reply
-      .header("payment-response", Buffer.from(JSON.stringify({ success: true, transaction: result.transaction, network: "hedera:testnet" })).toString("base64"))
-      .header("cache-control", "no-store")
-      .send({
-        ...RESOURCE_BODY,
-        payment: { status: "settled", transaction: result.transaction, settledAt: result.settledAt },
-        explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(result.transaction)}`,
-      });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Payment verification or settlement failed.";
-    await appendAuditEvent({ event: "payment.rejected", outcome: "rejected", details: { proofHash: key, reason, amountTinybars: AMOUNT_TINYBARS, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
-    request.log.error({ err: error }, "x402 paid-resource payment failed");
-    return reply.code(402).send({
-      ...challenge,
-      error: reason,
-      note: "Resource withheld because successful settlement was not confirmed.",
-    });
-  }
 }
+
+export const handlePaidResource = makeHandler(FULL_REPORT);
+export const handleShortSummaryResource = makeHandler(SHORT_SUMMARY);
 
 export const paidResourcePolicy = {
   network: "hedera:testnet",
   asset: "HBAR",
-  amountTinybars: AMOUNT_TINYBARS,
+  amountTinybars: FULL_REPORT.amountTinybars,
   amountHbar: "0.001",
   receiverAccountId: "configured-by-HEDERA_RECEIVER_ACCOUNT_ID",
   productionEnabled: false,
-  replayProtection: "in-memory idempotency for identical payment proofs; use durable storage before deployment",
+  replayProtection: "in-memory idempotency keyed by resource path and payment proof; use durable storage before deployment",
 };
