@@ -138,6 +138,12 @@ test("Phase 10 stops through the API without paying when every 402 quote exceeds
     assert.equal(response.json().status, "stopped-safely");
     assert.equal(response.json().paymentAttempted, false);
     assert.match(response.json().error, /No approved service advertises/);
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/agent/v2/run",
+      payload: { runId: "00000000-0000-4000-8000-000000000123", goal: "retry same task" },
+    });
+    assert.equal(duplicate.statusCode, 409, "a completed run ID cannot be replayed in-process");
     assert.equal(fetchCalls, 2, "only the two unpaid discovery requests should run; no paid retry or facilitator call");
   } finally {
     globalThis.fetch = previousFetch;
