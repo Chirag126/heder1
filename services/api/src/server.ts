@@ -9,8 +9,33 @@ import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
 export const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
-// Bind to localhost by default because the opt-in demo endpoint can transfer testnet HBAR.
-const host = process.env.HOST ?? "127.0.0.1";
+// Public hosts must bind to all interfaces; local payment testing stays loopback-only.
+const host = process.env.HOST ?? (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
+const configuredOrigins = (process.env.HEDERA_CORS_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\\/$/, ""))
+  .filter(Boolean);
+const allowedOrigins = new Set([
+  ...configuredOrigins,
+  ...(process.env.NODE_ENV === "production" ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"]),
+]);
+
+// Exact-origin CORS allowlist. Never reflect arbitrary Origin values or enable credentials.
+app.addHook("onRequest", async (request, reply) => {
+  const origin = request.headers.origin;
+  if (origin) {
+    const normalizedOrigin = origin.replace(/\\/$/, "");
+    if (!allowedOrigins.has(normalizedOrigin)) {
+      return reply.code(403).send({ error: "Origin is not allowed by the API CORS policy." });
+    }
+    reply.header("Access-Control-Allow-Origin", normalizedOrigin);
+    reply.header("Vary", "Origin");
+    reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, payment-signature");
+    reply.header("Access-Control-Max-Age", "600");
+  }
+  if (request.method === "OPTIONS") return reply.code(204).send();
+});
 
 app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-paid-resource" }));
 
