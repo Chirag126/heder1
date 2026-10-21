@@ -2,6 +2,7 @@ import "dotenv/config";
 import Fastify from "fastify";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
+import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -13,7 +14,7 @@ app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", netwo
 app.get("/api", async () => ({
   name: "heder1",
   description: "Security-first autonomous x402 payments on Hedera",
-  phase: "x402-paid-resource",
+  phase: "autonomous-payment-agent",
   paymentReady: Boolean(getX402Configuration()),
   paymentExecutionEnabled: process.env.HEDERA_X402_DEMO_ENABLED === "true" && process.env.NODE_ENV !== "production",
   note: "Paid-resource endpoint is testnet-only, fixed-price, and settles through the configured facilitator."
@@ -47,6 +48,39 @@ app.get("/api/x402/status", async (_request, reply) => {
  * verification and settlement both succeed.
  */
 app.get("/api/x402/paid-resource", handlePaidResource);
+
+
+/** Phase 2 agent status: reports policy/config only; never initiates a payment. */
+app.get("/api/agent/status", async () => ({
+  enabled: isAgentEnabled(),
+  policy: paymentAgentPolicy,
+  targetConfigured: Boolean(process.env.HEDERA_X402_PAID_RESOURCE_URL),
+}));
+
+/**
+ * Runs one bounded agent task. It may make one 0.001 HBAR testnet payment
+ * to the allowlisted local paid-resource endpoint. Disabled by default.
+ */
+app.post("/api/agent/run", async (request, reply) => {
+  if (!isAgentEnabled()) {
+    return reply.code(403).send({
+      error: "Autonomous payment agent is disabled.",
+      hint: "For local testnet development only, set HEDERA_AGENT_ENABLED=true and HEDERA_NETWORK=testnet.",
+    });
+  }
+  try {
+    const result = await runPaymentAgent();
+    return reply.code(result.response.status).send(result);
+  } catch (error) {
+    request.log.error({ err: error }, "autonomous x402 payment agent failed");
+    return reply.code(502).send({
+      agent: "heder1-autonomous-payment-agent",
+      decision: "rejected-or-failed",
+      error: error instanceof Error ? error.message : "Agent task failed.",
+      note: "No successful payment is claimed unless the response contains a settlement transaction ID.",
+    });
+  }
+});
 
 /**
  * Explicit local testnet payment. This endpoint can transfer 0.001 HBAR from

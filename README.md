@@ -46,6 +46,8 @@ HEDERA_CLIENT_PRIVATE_KEY=YOUR_TESTNET_ECDSA_PRIVATE_KEY
 HEDERA_RECEIVER_ACCOUNT_ID=0.0.11044329
 HEDERA_X402_FACILITATOR_URL=https://api.testnet.blocky402.com
 HEDERA_X402_DEMO_ENABLED=false
+HEDERA_AGENT_ENABLED=false
+HEDERA_X402_PAID_RESOURCE_URL=http://127.0.0.1:4000/api/x402/paid-resource
 ```
 
 Create/fund testnet accounts through the [Hedera Portal](https://portal.hedera.com/). Do not paste private keys into issues, chat, logs, or source files.
@@ -69,6 +71,26 @@ pnpm --filter @heder1/api demo:paid-resource
 ```
 
 A successful response should include HTTP status `200`, resource `heder1-demo-report`, payment status `settled`, a transaction ID, and a HashScan URL. Open the URL and verify the transaction status and transfer details. Do not treat a facilitator response alone as independent chain verification.
+
+## Phase 2: bounded autonomous payment agent
+
+The local agent can discover and evaluate its configured paid resource, then perform the x402 HTTP 402 challenge/retry automatically under a fixed policy. It is intentionally limited to the exact local route `/api/x402/paid-resource`, Hedera testnet, the configured receiver, native HBAR, and **at most 0.001 HBAR**. Remote URLs, alternate paths, query strings, and credentials in URLs are rejected. The agent is disabled by default and refuses to run in production.
+
+1. Start the API locally with `pnpm dev`.
+2. In `services/api/.env`, set `HEDERA_AGENT_ENABLED=true` and keep `HEDERA_NETWORK=testnet`.
+3. Check policy/status without paying:
+
+```cmd
+curl http://localhost:4000/api/agent/status
+```
+
+4. Run one agent task:
+
+```cmd
+curl -X POST http://localhost:4000/api/agent/run
+```
+
+**Payment warning:** an enabled run can send one **0.001 HBAR testnet payment**. The agent is not a background scheduler and this first version only handles one allowlisted resource. Keep the API bound to localhost, never enable it in production, and set `HEDERA_AGENT_ENABLED=false` when finished. A facilitator-reported transaction still needs independent HashScan verification.
 
 ## Optional direct payment endpoint
 
@@ -106,7 +128,9 @@ These checks validate types and builds; they do not replace automated tests or o
 - [x] Strict client-side policy for testnet, exact scheme, native HBAR, configured receiver, and fixed amount
 - [x] Facilitator verification and settlement before protected resource response
 - [x] Local end-to-end demo returned HTTP 200 with a settlement transaction ID
-- [ ] Automated unit/integration tests for challenge, invalid proofs, facilitator errors, and successful settlement
+- [x] Automated x402 tests for challenge, invalid proofs, facilitator errors, and successful mocked settlement
+- [x] Phase 2 bounded autonomous agent with target allowlist, testnet-only policy, and fixed 0.001 HBAR cap
+- [ ] Automated end-to-end agent run against a mocked local service in CI
 - [ ] Durable replay protection and persistent audit trail
 - [ ] Optional HCS audit records
 - [ ] Public deployment and deployment security review
