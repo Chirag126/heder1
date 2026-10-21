@@ -2,7 +2,6 @@ services:
   - type: web
     name: heder1-api
     runtime: node
-    plan: free
     buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @heder1/api build
     startCommand: pnpm --filter @heder1/api start
     healthCheckPath: /api/health
