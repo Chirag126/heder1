@@ -12,6 +12,8 @@ type DashboardData = {
   anchors?: { enabled: boolean; anchors: Array<{ topicId: string; sequenceNumber: number; transactionId: string; auditSequence: number; auditRecordHash: string; mirrorNodeUrl: string }> };
   history?: AuditRecord[];
 };
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const apiUrl = (path: string) => API_BASE_URL + path;
 const CHAIN_ID = "0x128";
 const shorten = (value: string, start = 10, end = 7) => value.length > start + end + 3 ? value.slice(0, start) + "…" + value.slice(-end) : value;
 const hashscanTx = (id: string) => "https://hashscan.io/testnet/transaction/" + encodeURIComponent(id);
@@ -32,7 +34,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     setLoading(true); setError("");
     const get = async <T,>(url: string): Promise<T> => {
-      const response = await fetch(url);
+      const response = await fetch(apiUrl(url));
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status} from ${url}`);
       return body as T;
@@ -82,12 +84,12 @@ export default function App() {
     setBusy("authorize"); setError(""); setNotice(""); setToken("");
     try {
       if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect a wallet, verify Hedera Testnet, and approve the one-run consent first.");
-      const challengeResponse = await fetch("/api/authorization/challenge", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: wallet, chainId: 296 }) });
+      const challengeResponse = await fetch(apiUrl("/api/authorization/challenge"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: wallet, chainId: 296 }) });
       const challenge = await challengeResponse.json() as { nonce?: string; message?: string; error?: string };
       if (!challengeResponse.ok || !challenge.nonce || !challenge.message) throw new Error(challenge.error ?? "Could not create authorization challenge.");
       const signature = await window.ethereum.request({ method: "personal_sign", params: [challenge.message, wallet] });
       if (typeof signature !== "string") throw new Error("Wallet did not return a signature.");
-      const verifyResponse = await fetch("/api/authorization/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nonce: challenge.nonce, signature }) });
+      const verifyResponse = await fetch(apiUrl("/api/authorization/verify"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nonce: challenge.nonce, signature }) });
       const grant = await verifyResponse.json() as { authorizationToken?: string; expiresAt?: string; error?: string };
       if (!verifyResponse.ok || !grant.authorizationToken) throw new Error(grant.error ?? "Signature verification failed.");
       setToken(grant.authorizationToken); setNotice(`One-time authorization issued until ${grant.expiresAt}. No payment has been made yet.`);
@@ -99,7 +101,7 @@ export default function App() {
     setBusy("agent"); setError(""); setNotice("");
     try {
       if (!token) throw new Error("Sign and authorize one invocation first.");
-      const response = await fetch("/api/agent/run", { method: "POST", headers: { "x-heder1-authorization": token } });
+      const response = await fetch(apiUrl("/api/agent/run"), { method: "POST", headers: { "x-heder1-authorization": token } });
       const result = await response.json() as { error?: string; response?: { status?: number; body?: Record<string, unknown> }; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
@@ -112,7 +114,7 @@ export default function App() {
     setBusy("verify"); setError(""); setVerification(null);
     try {
       const q = new URLSearchParams(verifyInput);
-      const response = await fetch("/api/audit/verify-hcs?" + q.toString());
+      const response = await fetch(apiUrl("/api/audit/verify-hcs?" + q.toString()));
       const result = await response.json() as { valid: boolean; url?: string; error?: string; anchoredAuditHash?: string };
       setVerification(result);
       if (!response.ok && !result.error) setError("The requested anchor did not verify.");

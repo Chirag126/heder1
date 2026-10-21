@@ -20,6 +20,40 @@ test("health route returns service status through Fastify injection", async () =
   assert.equal(response.json().service, "heder1-api");
 });
 
+test("configured frontend origin receives strict CORS headers", async () => {
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/health",
+    headers: { origin: "http://localhost:5173" },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["access-control-allow-origin"], "http://localhost:5173");
+  assert.equal(response.headers["access-control-allow-credentials"], undefined);
+});
+
+test("unknown browser origins are rejected", async () => {
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/health",
+    headers: { origin: "https://untrusted.example" },
+  });
+  assert.equal(response.statusCode, 403);
+});
+
+test("CORS preflight is answered without running a payment route", async () => {
+  const response = await app.inject({
+    method: "OPTIONS",
+    url: "/api/authorization/challenge",
+    headers: {
+      origin: "http://localhost:5173",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type",
+    },
+  });
+  assert.equal(response.statusCode, 204);
+  assert.equal(response.headers["access-control-allow-origin"], "http://localhost:5173");
+});
+
 test("audit history rejects an out-of-range limit", async () => {
   const response = await app.inject({ method: "GET", url: "/api/audit/records?limit=101" });
   assert.equal(response.statusCode, 400);
