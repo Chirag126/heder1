@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. Phase 10 (Autonomous agent v2) implementation is under review; the deterministic multi-service runner, approved local registry, bounded payment policy, and scoped wallet authorization are implemented, but live testnet acceptance is still required. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
+> **Current status:** Phases 0–9 are implemented, and Phase 9 live acceptance has been verified on Hedera Testnet. Phase 10's deterministic multi-service runner has completed a local wallet-authorized testnet run; the API reported a 0.0005 HBAR settlement and returned a transaction receipt. Independent HashScan confirmation and matching Phase 10 HCS audit-anchor verification are still operator checklist items documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -43,7 +43,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
-- **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. Local testnet acceptance is still required.
+- **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
 
 ## Architecture
 
@@ -508,7 +508,7 @@ The agent also requires the returned resource identifier to equal `heder1-demo-r
 
 **Result: PASS — Hedera Testnet live acceptance completed on 2026-10-22.**
 
-The following evidence was checked after running the local, wallet-authorized agent flow:
+The following Phase 9 evidence was checked after running the local, wallet-authorized agent flow:
 
 | Check | Observed result |
 |---|---|
@@ -583,3 +583,47 @@ New local endpoints:
 - `GET /api/x402/summary` — second paid service, priced at 50,000 tinybars (0.0005 HBAR).
 
 Set `HEDERA_AGENT_V2_ENABLED=true` only for local Hedera Testnet testing. Keep public Render payment execution disabled. The code and automated tests do not replace a live testnet payment and independent HashScan receipt check; Phase 10 is not complete until that acceptance run succeeds.
+
+
+### Phase 10 live run evidence — 2026-10-21
+
+**Local end-to-end run: PASS according to the API response. Independent explorer and HCS matching checks remain operator verification steps.**
+
+| Check | Observed result |
+|---|---|
+| Agent run ID | `d2e64178-19f9-4e80-a4ca-6855d63e82b9` |
+| Agent status | `completed`; plan accepted; no reported plan errors |
+| Discovery | 2 registered services checked; 4 HTTP calls |
+| Deterministic selection | `heder1-short-summary` |
+| Selected price | 50,000 tinybars = 0.0005 HBAR |
+| Paid calls | 1 |
+| Budget | 500,000 tinybars (0.005 HBAR); API reports 50,000 tinybars reserved |
+| Settlement reported by API | `settled` |
+| Transaction ID returned | `0.0.7162784@1792621688.152704457` |
+| Wallet authorization | Correct Phase 10 scope; single-use grant consumed |
+
+Evidence links:
+
+- [Open the reported Phase 10 settlement in HashScan Testnet](https://hashscan.io/testnet/transaction/0.0.7162784%401792621688.152704457)
+- [Look up the transaction in the Hedera Testnet Mirror Node](https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.7162784-1792621688-152704457)
+
+If you save the run response locally as `evidence/phase-10/successful-agent-run.json`, inspect it before committing and confirm it contains no secrets, signatures, authorization tokens, or payment proofs.
+
+**Independent verification still required:** open the HashScan link and confirm the transaction succeeded and its transfer details agree with the reported payment. Then use the local API's audit endpoints to locate the `payment.settled` and `agent.run_finished` records for this run and verify the matching HCS anchor against the public Mirror Node. Do not describe the Phase 10 payment or its specific audit record as independently verified until these checks are complete.
+
+PowerShell audit inspection (local API must be running):
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:4000/api/audit/status |
+  ConvertTo-Json -Depth 5
+
+Invoke-RestMethod "http://127.0.0.1:4000/api/audit/records?limit=30" |
+  ConvertTo-Json -Depth 10
+
+Invoke-RestMethod http://127.0.0.1:4000/api/audit/anchors |
+  ConvertTo-Json -Depth 10
+```
+
+Use the matching anchor's `topicId`, `sequenceNumber`, and `auditRecordHash` to verify it via the API or public Mirror Node. The verification API is documented above as `GET /api/audit/verify-hcs?topicId=...&sequenceNumber=...&auditHash=...`.
+
+The transaction above is the reported x402 payment. An HCS `SUBMIT MESSAGE` transaction is a separate audit-anchor transaction and must not be represented as the payment itself. Local hash-chain integrity, HCS hash matching, and payment settlement are three separate checks.
