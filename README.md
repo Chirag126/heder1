@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
+> **Current status:** Phases 0–9 are implemented, and the Phase 9 live acceptance flow has been verified on Hedera Testnet. Phase 10 (Autonomous agent v2) is in progress; deterministic planning and policy primitives are being added, but multi-service paid execution is not yet accepted. The confirmed x402 settlement, local audit-chain validation, and HCS anchor checks are documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -27,6 +27,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 8: public deployment](#phase-8-public-deployment)
 - [Phase 9: settlement receipt validation](#phase-9-settlement-receipt-validation)
 - [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
+- [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -42,6 +43,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
+- **Phase 10 planning foundation:** deterministic parsing and filtering of x402 v2 payment requirements with bounded task limits. Multi-service payment execution remains in progress.
 
 ## Architecture
 
@@ -566,3 +568,8 @@ Do not describe the project as production-ready until these limitations have bee
 ## License
 
 To be selected before public release.
+
+
+## Phase 10: autonomous agent v2
+
+Phase 10 is in progress. The deterministic planning foundation is documented in [`docs/PHASE-10.md`](docs/PHASE-10.md). It adds bounded limit validation, x402 v2 requirement parsing, and deterministic cheapest-eligible candidate selection. It does not yet implement live multi-service discovery or paid multi-service execution. Do not enable public payment execution; keep the existing Render safety flags disabled.
