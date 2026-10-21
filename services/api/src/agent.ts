@@ -3,6 +3,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
+import { reserveAgentSpend } from "./spending-firewall.js";
 
 const DEFAULT_RESOURCE_URL = "http://127.0.0.1:4000/api/x402/paid-resource";
 const RESOURCE_PATH = "/api/x402/paid-resource";
@@ -61,6 +62,13 @@ export async function runPaymentAgent() {
   const requestedUrl = process.env.HEDERA_X402_PAID_RESOURCE_URL ?? DEFAULT_RESOURCE_URL;
   const decision = evaluateAgentTarget(requestedUrl);
   if (!decision.allowed) throw new Error(decision.reason);
+
+  const reservation = await reserveAgentSpend({
+    amountTinybars: decision.maxAmountTinybars,
+    receiverAccountId: config.receiverAccountId,
+    resourceUrl: decision.url,
+  });
+  if (!reservation.allowed) throw new Error(reservation.reason);
 
   const signer = createClientHederaSigner(
     config.accountId,
