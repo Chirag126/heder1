@@ -9,9 +9,46 @@ const DEFAULT_RESOURCE_URL = "http://127.0.0.1:4000/api/x402/paid-resource";
 const RESOURCE_PATH = "/api/x402/paid-resource";
 const MAX_AMOUNT_TINYBARS = 100_000;
 
+type JsonRecord = Record<string, unknown>;
+
 export type AgentPolicyDecision =
   | { allowed: true; reason: "approved-resource"; url: string; maxAmountTinybars: string }
   | { allowed: false; reason: string };
+
+export type SettlementReceipt = {
+  transactionId: string;
+  settledAt?: string;
+  resource: string;
+};
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * A successful HTTP status alone is not proof that an x402 resource was paid.
+ * The heder1 demo resource must include its explicit settlement receipt.
+ */
+export function extractSettlementReceipt(status: number, body: unknown): SettlementReceipt {
+  if (status < 200 || status >= 300) {
+    throw new Error(`Paid resource returned HTTP ${status}; no successful resource delivery is claimed.`);
+  }
+  if (!isRecord(body) || !isRecord(body.payment)) {
+    throw new Error("Resource response did not include a verifiable settlement receipt.");
+  }
+  const payment = body.payment;
+  if (payment.status !== "settled" || typeof payment.transaction !== "string" || !payment.transaction.trim()) {
+    throw new Error("Resource response did not confirm settlement with a transaction ID.");
+  }
+  if (typeof body.resource !== "string" || !body.resource.trim()) {
+    throw new Error("Settlement receipt was present, but the expected protected resource was missing.");
+  }
+  return {
+    transactionId: payment.transaction.trim(),
+    ...(typeof payment.settledAt === "string" ? { settledAt: payment.settledAt } : {}),
+    resource: body.resource,
+  };
+}
 
 export function evaluateAgentTarget(rawUrl: string): AgentPolicyDecision {
   let url: URL;
@@ -93,6 +130,7 @@ export async function runPaymentAgent() {
   const paidFetch = wrapFetchWithPayment(fetch, client);
   const response = await paidFetch(decision.url, { method: "GET", signal: AbortSignal.timeout(45_000) });
   const body: unknown = await response.json().catch(() => null);
+  const receipt = extractSettlementReceipt(response.status, body);
 
   return {
     agent: "heder1-autonomous-payment-agent",
@@ -103,6 +141,12 @@ export async function runPaymentAgent() {
       maxAmountTinybars: decision.maxAmountTinybars,
       maxAmountHbar: "0.001",
       allowedResource: RESOURCE_PATH,
+    },
+    settlement: {
+      status: "settled" as const,
+      transactionId: receipt.transactionId,
+      settledAt: receipt.settledAt ?? null,
+      explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(receipt.transactionId)}`,
     },
     response: { status: response.status, ok: response.ok, body },
   };

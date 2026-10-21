@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { evaluateAgentTarget, isAgentEnabled, paymentAgentPolicy } from "./agent.js";
+import { evaluateAgentTarget, extractSettlementReceipt, isAgentEnabled, paymentAgentPolicy } from "./agent.js";
 
 const originalEnv = { ...process.env };
 
@@ -54,4 +54,32 @@ test("agent policy advertises a fixed tinybars cap and blocks remote targets", (
   assert.equal(paymentAgentPolicy.enabledByDefault, false);
   assert.equal(paymentAgentPolicy.maxAmountTinybars, "100000");
   assert.equal(paymentAgentPolicy.remoteTargetsAllowed, false);
+});
+
+test("agent accepts a 2xx protected-resource response only with a settled transaction receipt", () => {
+  assert.deepEqual(extractSettlementReceipt(200, {
+    resource: "heder1-demo-report",
+    payment: { status: "settled", transaction: "0.0.123@1760000000.000000001", settledAt: "2026-10-22T00:00:00.000Z" },
+  }), {
+    transactionId: "0.0.123@1760000000.000000001",
+    settledAt: "2026-10-22T00:00:00.000Z",
+    resource: "heder1-demo-report",
+  });
+});
+
+test("agent does not treat HTTP success without a settlement receipt as payment success", () => {
+  assert.throws(() => extractSettlementReceipt(200, { resource: "hello" }), /settlement receipt/);
+  assert.throws(() => extractSettlementReceipt(200, {
+    resource: "heder1-demo-report",
+    payment: { status: "pending", transaction: "0.0.123@1760000000.000000001" },
+  }), /did not confirm settlement/);
+  assert.throws(() => extractSettlementReceipt(200, {
+    payment: { status: "settled", transaction: "0.0.123@1760000000.000000001" },
+  }), /protected resource was missing/);
+});
+
+test("agent refuses to claim a paid delivery on non-2xx responses", () => {
+  assert.throws(() => extractSettlementReceipt(402, {
+    error: "Facilitator rejected payment",
+  }), /HTTP 402/);
 });
