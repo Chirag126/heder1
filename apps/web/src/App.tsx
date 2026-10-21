@@ -12,7 +12,7 @@ type DashboardData = {
   anchors?: { enabled: boolean; anchors: Array<{ topicId: string; sequenceNumber: number; transactionId: string; auditSequence: number; auditRecordHash: string; mirrorNodeUrl: string }> };
   history?: AuditRecord[];
 };
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\\/$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const apiUrl = (path: string) => API_BASE_URL + path;
 const CHAIN_ID = "0x128";
 const shorten = (value: string, start = 10, end = 7) => value.length > start + end + 3 ? value.slice(0, start) + "…" + value.slice(-end) : value;
