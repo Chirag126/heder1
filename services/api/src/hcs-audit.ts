@@ -1,4 +1,10 @@
-import { AccountId, Client, PrivateKey, TopicMessageSubmitTransaction } from "@hiero-ledger/sdk";
+
+import {
+  AccountId,
+  Client,
+  PrivateKey,
+  TopicMessageSubmitTransaction,
+} from "@hiero-ledger/sdk";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
@@ -14,21 +20,49 @@ export type HcsAnchor = {
 
 function getHcsConfig() {
   if (process.env.HEDERA_AUDIT_HCS_ENABLED !== "true") return null;
-  if (process.env.HEDERA_NETWORK !== "testnet") throw new Error("HCS audit anchoring is restricted to Hedera Testnet.");
+
+  if (process.env.HEDERA_NETWORK !== "testnet") {
+    throw new Error("HCS audit anchoring is restricted to Hedera Testnet.");
+  }
+
   const topicId = process.env.HEDERA_AUDIT_HCS_TOPIC_ID;
-  const accountId = process.env.HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID ?? process.env.HEDERA_CLIENT_ACCOUNT_ID;
-  const privateKey = process.env.HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY ?? process.env.HEDERA_CLIENT_PRIVATE_KEY;
-  if (!topicId || !/^0\.0\.\d+$/.test(topicId)) throw new Error("A valid HEDERA_AUDIT_HCS_TOPIC_ID is required when HCS anchoring is enabled.");
-  if (!accountId || !/^0\.0\.\d+$/.test(accountId) || !privateKey) throw new Error("HCS operator credentials are required when HCS anchoring is enabled.");
+  const accountId =
+    process.env.HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID ??
+    process.env.HEDERA_CLIENT_ACCOUNT_ID;
+  const privateKey =
+    process.env.HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY ??
+    process.env.HEDERA_CLIENT_PRIVATE_KEY;
+
+  if (!topicId || !/^0\.0\.\d+$/.test(topicId)) {
+    throw new Error(
+      "A valid HEDERA_AUDIT_HCS_TOPIC_ID is required when HCS anchoring is enabled.",
+    );
+  }
+
+  if (!accountId || !/^0\.0\.\d+$/.test(accountId) || !privateKey) {
+    throw new Error(
+      "HCS operator credentials are required when HCS anchoring is enabled.",
+    );
+  }
+
   return { topicId, accountId, privateKey };
 }
 
-export async function anchorAuditRecord(input: { sequence: number; hash: string }): Promise<HcsAnchor | null> {
+export async function anchorAuditRecord(input: {
+  sequence: number;
+  hash: string;
+}): Promise<HcsAnchor | null> {
   const config = getHcsConfig();
   if (!config) return null;
+
   const client = Client.forTestnet();
+
   try {
-    client.setOperator(AccountId.fromString(config.accountId), PrivateKey.fromString(config.privateKey));
+    client.setOperator(
+      AccountId.fromString(config.accountId),
+      PrivateKey.fromStringECDSA(config.privateKey),
+    );
+
     const message = JSON.stringify({
       schema: "heder1.audit-anchor.v1",
       network: "testnet",
@@ -37,15 +71,23 @@ export async function anchorAuditRecord(input: { sequence: number; hash: string 
       auditRecordHash: input.hash,
       algorithm: "sha-256",
     });
+
     const response = await new TopicMessageSubmitTransaction()
       .setTopicId(config.topicId)
       .setMessage(message)
       .execute(client);
+
     const receipt = await response.getReceipt(client);
-    const sequenceNumber = Number(receipt.topicSequenceNumber?.toString());
+    const sequenceNumber = Number(
+      receipt.topicSequenceNumber?.toString(),
+    );
+
     if (!Number.isSafeInteger(sequenceNumber) || sequenceNumber < 1) {
-      throw new Error("HCS submission succeeded without a usable topic sequence number.");
+      throw new Error(
+        "HCS submission succeeded without a usable topic sequence number.",
+      );
     }
+
     const anchor: HcsAnchor = {
       network: "testnet",
       topicId: config.topicId,
@@ -55,9 +97,19 @@ export async function anchorAuditRecord(input: { sequence: number; hash: string 
       auditRecordHash: input.hash,
       mirrorNodeUrl: `https://testnet.mirrornode.hedera.com/api/v1/topics/${config.topicId}/messages/${sequenceNumber}`,
     };
-    const indexPath = resolve(process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ?? "./data/audit-anchors.jsonl");
+
+    const indexPath = resolve(
+      process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ??
+        "./data/audit-anchors.jsonl",
+    );
+
     await mkdir(dirname(indexPath), { recursive: true });
-    await appendFile(indexPath, JSON.stringify(anchor) + "\n", { encoding: "utf8", mode: 0o600, flag: "a" });
+    await appendFile(indexPath, JSON.stringify(anchor) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "a",
+    });
+
     return anchor;
   } finally {
     client.close();
@@ -65,35 +117,115 @@ export async function anchorAuditRecord(input: { sequence: number; hash: string 
 }
 
 export async function listHcsAnchors(): Promise<HcsAnchor[]> {
-  const path = resolve(process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ?? "./data/audit-anchors.jsonl");
+  const path = resolve(
+    process.env.HEDERA_AUDIT_ANCHOR_INDEX_PATH ??
+      "./data/audit-anchors.jsonl",
+  );
+
   let raw: string;
-  try { raw = await readFile(path, "utf8"); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
     throw error;
   }
-  return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line) as HcsAnchor);
+
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as HcsAnchor);
 }
 
-export async function verifyHcsAnchor(input: { topicId: string; sequenceNumber: number; expectedAuditHash: string }) {
-  if (!/^0\.0\.\d+$/.test(input.topicId) || !Number.isSafeInteger(input.sequenceNumber) || input.sequenceNumber < 1 ||
-      !/^[a-f0-9]{64}$/.test(input.expectedAuditHash)) {
-    throw new Error("A valid topic ID, sequence number, and SHA-256 audit hash are required.");
+export async function verifyHcsAnchor(input: {
+  topicId: string;
+  sequenceNumber: number;
+  expectedAuditHash: string;
+}) {
+  if (
+    !/^0\.0\.\d+$/.test(input.topicId) ||
+    !Number.isSafeInteger(input.sequenceNumber) ||
+    input.sequenceNumber < 1 ||
+    !/^[a-f0-9]{64}$/.test(input.expectedAuditHash)
+  ) {
+    throw new Error(
+      "A valid topic ID, sequence number, and SHA-256 audit hash are required.",
+    );
   }
+
   const url = `https://testnet.mirrornode.hedera.com/api/v1/topics/${input.topicId}/messages/${input.sequenceNumber}`;
-  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
-  if (response.status === 404) return { valid: false, reason: "HCS message not found on the testnet Mirror Node.", url };
-  if (!response.ok) throw new Error(`Mirror Node returned HTTP ${response.status}.`);
-  const body = await response.json() as { messages?: Array<{ message?: string; topic_id?: string; sequence_number?: number }> };
-  const message = body.messages?.[0];
-  if (!message?.message || message.topic_id !== input.topicId || message.sequence_number !== input.sequenceNumber) {
-    return { valid: false, reason: "Mirror Node response did not match the requested HCS message.", url };
+
+  const response = await fetch(url, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (response.status === 404) {
+    return {
+      valid: false,
+      reason: "HCS message not found on the testnet Mirror Node.",
+      url,
+    };
   }
-  let decoded: { schema?: string; network?: string; topicId?: string; auditRecordHash?: string; algorithm?: string };
-  try { decoded = JSON.parse(Buffer.from(message.message, "base64").toString("utf8")); }
-  catch { return { valid: false, reason: "HCS message was not valid anchor JSON.", url }; }
-  const valid = decoded.schema === "heder1.audit-anchor.v1" &&
-    decoded.network === "testnet" && decoded.topicId === input.topicId &&
-    decoded.algorithm === "sha-256" && decoded.auditRecordHash === input.expectedAuditHash;
-  return { valid, topicId: input.topicId, sequenceNumber: input.sequenceNumber, expectedAuditHash: input.expectedAuditHash, anchoredAuditHash: decoded.auditRecordHash ?? null, url };
+
+  if (!response.ok) {
+    throw new Error(`Mirror Node returned HTTP ${response.status}.`);
+  }
+
+  // The single-message endpoint returns one object, not { messages: [...] }.
+  const message = (await response.json()) as {
+    message?: string;
+    topic_id?: string;
+    sequence_number?: number | string;
+  };
+
+  if (
+    !message.message ||
+    message.topic_id !== input.topicId ||
+    Number(message.sequence_number) !== input.sequenceNumber
+  ) {
+    return {
+      valid: false,
+      reason: "Mirror Node response did not match the requested HCS message.",
+      url,
+    };
+  }
+
+  let decoded: {
+    schema?: string;
+    network?: string;
+    topicId?: string;
+    auditRecordHash?: string;
+    algorithm?: string;
+  };
+
+  try {
+    decoded = JSON.parse(
+      Buffer.from(message.message, "base64").toString("utf8"),
+    );
+  } catch {
+    return {
+      valid: false,
+      reason: "HCS message was not valid anchor JSON.",
+      url,
+    };
+  }
+
+  const valid =
+    decoded.schema === "heder1.audit-anchor.v1" &&
+    decoded.network === "testnet" &&
+    decoded.topicId === input.topicId &&
+    decoded.algorithm === "sha-256" &&
+    decoded.auditRecordHash === input.expectedAuditHash;
+
+  return {
+    valid,
+    topicId: input.topicId,
+    sequenceNumber: input.sequenceNumber,
+    expectedAuditHash: input.expectedAuditHash,
+    anchoredAuditHash: decoded.auditRecordHash ?? null,
+    url,
+  };
 }
