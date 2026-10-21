@@ -5,7 +5,7 @@ import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
-import { appendAuditEvent } from "./audit-trail.js";
+import { appendAuditEvent, verifyAuditTrail } from "./audit-trail.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -79,6 +79,17 @@ app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/v
   } catch (error) {
     await appendAuditEvent({ event: "authorization.rejected", outcome: "rejected", details: { stage: "signature-verification", reason: error instanceof Error ? error.message : "Wallet authorization failed." } });
     return reply.code(401).send({ error: error instanceof Error ? error.message : "Wallet authorization failed." });
+  }
+});
+
+/** Local audit integrity summary; does not expose payment proofs or wallet signatures. */
+app.get("/api/audit/status", async (_request, reply) => {
+  try {
+    const verification = await verifyAuditTrail();
+    if (!verification.valid) return reply.code(500).send({ ...verification, ledger: "local-jsonl-hash-chain", independentlyAnchored: false });
+    return { ...verification, ledger: "local-jsonl-hash-chain", independentlyAnchored: false, note: "Local hash-chain validation only. This is not an HCS anchor or proof against deletion by the host." };
+  } catch (error) {
+    return reply.code(500).send({ valid: false, error: error instanceof Error ? error.message : "Could not verify audit trail." });
   }
 });
 
