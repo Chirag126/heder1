@@ -14,4 +14,5 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json
 .idea/
-\n# Local spending-firewall ledger (contains payment activity)\nservices/api/data/\n
+# Local spending-firewall ledger (contains payment activity)
+services/api/data/
