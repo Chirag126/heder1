@@ -203,6 +203,36 @@ The API queries the public Hedera Testnet Mirror Node and compares the decoded m
 
 Automated tests cover matching and mismatching Mirror Node messages without submitting a real HCS transaction. A live end-to-end anchor has not been run by CI. Before claiming a verified live deployment, configure a testnet topic/operator, submit one harmless test anchor, and independently confirm the message on the public Mirror Node.
 
+## Hedera Consensus Service (HCS) Audit Anchoring
+
+Heder1 anchors SHA-256 hashes of local audit records to the Hedera Testnet Consensus Service (HCS). This provides a public, independently verifiable reference for checking whether an audit-record hash matches the hash committed to the topic.
+
+### Testnet verification evidence
+
+- **Network:** Hedera Testnet
+- **Topic ID:** `0.0.11115485`
+- **Sequence number:** `1`
+- **Audit sequence:** `39`
+- **Algorithm:** SHA-256
+- **Verification result:** `valid: true`
+- **Expected hash matched anchored hash:** Yes
+
+**Public Mirror Node URL:**
+
+https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/1
+
+**Verification API result:** The local Heder1 verification endpoint returned `valid: true`. The expected audit hash matched the hash decoded from the public HCS message.
+
+This demonstrates that the specified audit-record hash was anchored to the Hedera Testnet topic and successfully matched against the public Mirror Node message.
+
+### Security and limitations
+
+- Private keys, seed phrases, wallet signatures, and payment proofs must never be committed to the repository or README.
+- HCS stores the audit hash and anchoring metadata, not the complete local audit log.
+- Hash anchoring does not independently prove that a payment occurred or that the original audit event was truthful.
+- This evidence is from Hedera Testnet and is not a production-security certification.
+
+
 ## Phase 6 — Live product dashboard
 
 The dashboard now reads current state from the Fastify API rather than relying only on static UI labels.
