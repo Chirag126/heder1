@@ -27,6 +27,9 @@ export default function App() {
   const [walletMessage, setWalletMessage] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [permissionApproved, setPermissionApproved] = useState(false);
+  const [authorizationToken, setAuthorizationToken] = useState("");
+  const [authorizing, setAuthorizing] = useState(false);
+  const [agentRunning, setAgentRunning] = useState(false);
 
   async function checkBackend() {
     setChecking(true); setError("");
@@ -57,7 +60,7 @@ export default function App() {
         : "Wallet connected, but the network is not Hedera Testnet. Payment authorization remains unavailable.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Wallet connection failed.");
-      setWalletAccount(""); setWalletChain(""); setPermissionApproved(false);
+      setWalletAccount(""); setWalletChain(""); setPermissionApproved(false); setAuthorizationToken("");
     } finally { setConnecting(false); }
   }
 
@@ -83,6 +86,53 @@ export default function App() {
   function disconnectWallet() {
     setWalletAccount(""); setWalletChain(""); setPermissionApproved(false);
     setWalletMessage("Wallet disconnected from this page. Any wallet-level session may need to be disconnected in the wallet.");
+  }
+
+  async function authorizeOneRun() {
+    setError(""); setWalletMessage(""); setAuthorizing(true); setAuthorizationToken("");
+    try {
+      if (!window.ethereum || !walletAccount || !isTestnet || !permissionApproved) {
+        throw new Error("Connect a wallet, verify Hedera Testnet, and approve the limited permission first.");
+      }
+      const challengeResponse = await fetch("/api/authorization/challenge", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ account: walletAccount, chainId: 296 }),
+      });
+      const challenge = await challengeResponse.json() as { nonce?: string; message?: string; error?: string };
+      if (!challengeResponse.ok || !challenge.nonce || !challenge.message) throw new Error(challenge.error ?? "Could not create authorization challenge.");
+      const signature = await window.ethereum.request({
+        method: "personal_sign",
+        params: [challenge.message, walletAccount],
+      });
+      if (typeof signature !== "string") throw new Error("Wallet did not return a signature.");
+      const verifyResponse = await fetch("/api/authorization/verify", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nonce: challenge.nonce, signature }),
+      });
+      const verified = await verifyResponse.json() as { authorizationToken?: string; expiresAt?: string; error?: string };
+      if (!verifyResponse.ok || !verified.authorizationToken) throw new Error(verified.error ?? "Wallet signature verification failed.");
+      setAuthorizationToken(verified.authorizationToken);
+      setWalletMessage(`One-time server authorization issued until ${verified.expiresAt}. No payment has been made.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not authorize the agent.");
+    } finally { setAuthorizing(false); }
+  }
+
+  async function runAuthorizedAgent() {
+    setError(""); setAgentRunning(true);
+    try {
+      if (!authorizationToken) throw new Error("Authorize one agent invocation first.");
+      const response = await fetch("/api/agent/run", {
+        method: "POST", headers: { "x-heder1-authorization": authorizationToken },
+      });
+      const result = await response.json() as { error?: string; decision?: string; response?: { status?: number }; authorization?: { consumed?: boolean } };
+      setAuthorizationToken("");
+      setPermissionApproved(false);
+      if (!response.ok) throw new Error(result.error ?? `Agent request failed with HTTP ${response.status}.`);
+      setWalletMessage(`Authorized agent invocation completed (HTTP ${result.response?.status ?? response.status}). The one-time authorization has been consumed.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Authorized agent run failed.");
+    } finally { setAgentRunning(false); }
   }
 
   const isTestnet = walletChain.toLowerCase() === HEDERA_TESTNET_CHAIN_ID;
@@ -131,7 +181,15 @@ export default function App() {
             <input type="checkbox" checked={permissionApproved} disabled={!walletAccount || !isTestnet} onChange={(e) => setPermissionApproved(e.target.checked)} />
             <span>I approve this limited permission for a single task on Hedera Testnet.</span>
           </label>
-          <p className="security-note">{permissionApproved ? "Consent recorded in this page only. It resets when you disconnect or change network; it does not submit a transaction." : "Connect a wallet and verify Hedera Testnet before this permission can be selected."}</p>
+          <div className="authorization-actions">
+            <button className="secondary" onClick={authorizeOneRun} disabled={!walletAccount || !isTestnet || !permissionApproved || authorizing || Boolean(authorizationToken)}>
+              {authorizing ? "Waiting for wallet signature…" : authorizationToken ? "One-time authorization ready" : "Sign & authorize one run"}
+            </button>
+            <button onClick={runAuthorizedAgent} disabled={!authorizationToken || agentRunning}>
+              {agentRunning ? "Running agent…" : "Run authorized agent"}
+            </button>
+          </div>
+          <p className="security-note">{authorizationToken ? "A short-lived, server-verified, single-use grant is ready. Running the agent may spend up to 0.001 HBAR on Hedera Testnet if the backend agent is enabled." : permissionApproved ? "Next, sign a one-time server challenge with your wallet. This signature does not itself transfer funds." : "Connect a wallet and verify Hedera Testnet before this permission can be selected."}</p>
         </div>
       </section>
 
@@ -140,7 +198,7 @@ export default function App() {
       <section className="grid" aria-label="Project capabilities">
         <article className="feature-card"><span className="number">01</span><h2>Autonomous x402</h2><p>A client discovers a price and completes a paid HTTP request through the configured facilitator.</p><span className="status">TESTNET DEMO</span></article>
         <article className="feature-card"><span className="number">02</span><h2>Spending firewall</h2><p>Per-payment caps, a daily budget, and attempt limits are checked before the agent signs.</p><span className="status">IMPLEMENTED · LOCAL LEDGER</span></article>
-        <article className="feature-card"><span className="number">03</span><h2>Explicit authorization</h2><p>Wallet identity and network are checked before the UI permits limited consent. No unrestricted wallet access.</p><span className="status">PHASE 4 · UI CONSENT ONLY</span></article>
+        <article className="feature-card"><span className="number">03</span><h2>Explicit authorization</h2><p>Wallet identity and network are checked before the UI permits limited consent. No unrestricted wallet access.</p><span className="status">PHASE 4 · SIGNED ONE-TIME GRANT</span></article>
       </section>
 
       <footer><span>heder1 · ETHGlobal Mumbai preparation</span><span>Testnet only · Never put secrets in frontend code</span></footer>

@@ -91,3 +91,6 @@ button.secondary { color: #e2e9f3; background: #222b38; border: 1px solid var(--
   .limits div { flex-direction: column; gap: 5px; }
   .limits dd { text-align: left; }
 }
+
+.authorization-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.authorization-actions button { font-size: 12px; }
