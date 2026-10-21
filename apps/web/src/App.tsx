@@ -1,19 +1,35 @@
 import { useState } from "react";
 
-type HealthResult = {
-  status: string;
-  service: string;
-  network: string;
+type HealthResult = { status: string; service: string; network: string };
+type Eip1193Provider = {
+  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
 };
+declare global {
+  interface Window { ethereum?: Eip1193Provider }
+}
+
+const HEDERA_TESTNET_CHAIN_ID = "0x128"; // 296
+const MAX_PAYMENT_HBAR = "0.001";
+const ALLOWED_RESOURCE = "/api/x402/paid-resource";
+
+function shortenAccount(account: string) {
+  return account.length > 18 ? `${account.slice(0, 10)}…${account.slice(-6)}` : account;
+}
 
 export default function App() {
   const [health, setHealth] = useState<HealthResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
+  const [walletAccount, setWalletAccount] = useState("");
+  const [walletChain, setWalletChain] = useState("");
+  const [walletMessage, setWalletMessage] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [permissionApproved, setPermissionApproved] = useState(false);
 
   async function checkBackend() {
-    setChecking(true);
-    setError("");
+    setChecking(true); setError("");
     try {
       const response = await fetch("/api/health");
       if (!response.ok) throw new Error(`API returned HTTP ${response.status}`);
@@ -21,67 +37,113 @@ export default function App() {
     } catch {
       setError("Backend not reachable yet. Start both apps with pnpm dev.");
       setHealth(null);
-    } finally {
-      setChecking(false);
+    } finally { setChecking(false); }
+  }
+
+  async function connectWallet() {
+    setError(""); setWalletMessage(""); setConnecting(true);
+    try {
+      if (!window.ethereum) {
+        throw new Error("No EVM-compatible wallet was detected. Install or open a Hedera-compatible wallet with EVM support, then try again.");
+      }
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const chainId = await window.ethereum.request({ method: "eth_chainId" });
+      if (!Array.isArray(accounts) || typeof accounts[0] !== "string") throw new Error("Wallet did not return an account.");
+      setWalletAccount(accounts[0]);
+      setWalletChain(String(chainId));
+      setPermissionApproved(false);
+      setWalletMessage(String(chainId).toLowerCase() === HEDERA_TESTNET_CHAIN_ID
+        ? "Wallet connected on Hedera Testnet. No transaction was requested."
+        : "Wallet connected, but the network is not Hedera Testnet. Payment authorization remains unavailable.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Wallet connection failed.");
+      setWalletAccount(""); setWalletChain(""); setPermissionApproved(false);
+    } finally { setConnecting(false); }
+  }
+
+  async function switchToTestnet() {
+    setError(""); setWalletMessage("");
+    try {
+      if (!window.ethereum) throw new Error("No compatible wallet is available.");
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: HEDERA_TESTNET_CHAIN_ID }],
+      });
+      const chainId = await window.ethereum.request({ method: "eth_chainId" });
+      setWalletChain(String(chainId));
+      setPermissionApproved(false);
+      setWalletMessage(String(chainId).toLowerCase() === HEDERA_TESTNET_CHAIN_ID
+        ? "Hedera Testnet verified. Review the limited permission below before authorizing."
+        : "The wallet is still on an unsupported network.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not switch wallet network.");
     }
   }
+
+  function disconnectWallet() {
+    setWalletAccount(""); setWalletChain(""); setPermissionApproved(false);
+    setWalletMessage("Wallet disconnected from this page. Any wallet-level session may need to be disconnected in the wallet.");
+  }
+
+  const isTestnet = walletChain.toLowerCase() === HEDERA_TESTNET_CHAIN_ID;
 
   return (
     <main className="shell">
       <header className="topbar">
         <a className="brand" href="/" aria-label="heder1 home">
-          <span className="brand-mark">h1</span>
-          <span>heder<span className="accent">1</span></span>
+          <span className="brand-mark">h1</span><span>heder<span className="accent">1</span></span>
         </a>
-        <span className="network-pill"><span className="pulse" /> HEDERA TESTNET · PLANNED</span>
+        <span className="network-pill"><span className={isTestnet ? "pulse online" : "pulse"} /> {walletAccount ? (isTestnet ? "HEDERA TESTNET · VERIFIED" : "NETWORK NOT VERIFIED") : "HEDERA TESTNET · WALLET DISCONNECTED"}</span>
       </header>
 
       <section className="hero">
         <p className="eyebrow">AUTONOMOUS PAYMENTS · BUILT WITH GUARDRAILS</p>
         <h1>Let agents pay.<br /><span className="muted">Never let them overspend.</span></h1>
-        <p className="intro">
-          heder1 is a security-first payment layer for AI agents. Agents will discover paid
-          services and settle x402 requests on Hedera, with explicit budgets and an auditable trail.
-        </p>
+        <p className="intro">heder1 is a security-first payment layer for AI agents. Connect a compatible wallet to view its account and verify the network. Payment permissions remain bounded and explicit.</p>
         <div className="hero-actions">
-          <button onClick={checkBackend} disabled={checking}>
-            {checking ? "Checking backend…" : "Check backend connection"}
-          </button>
-          <span className="quiet">Foundation scaffold · No payment executed</span>
+          <button onClick={checkBackend} disabled={checking}>{checking ? "Checking backend…" : "Check backend connection"}</button>
+          <span className="quiet">Testnet only · No payment executed</span>
         </div>
-        {health && (
-          <div className="notice success" role="status">
-            API status: {health.status} · Service: {health.service} · Network: {health.network}
+        {health && <div className="notice success" role="status">API status: {health.status} · Service: {health.service} · Network: {health.network}</div>}
+      </section>
+
+      <section className="wallet-panel" aria-labelledby="wallet-heading">
+        <div className="section-heading"><div><p className="eyebrow">PHASE 4 · WALLET & AUTHORIZATION</p><h2 id="wallet-heading">Wallet connection</h2></div><span className="tag">{walletAccount ? "CONNECTED" : "NOT CONNECTED"}</span></div>
+        <p className="panel-copy">Connect through your wallet's EVM provider. heder1 never asks for or stores your seed phrase or private key.</p>
+        {!walletAccount ? <button onClick={connectWallet} disabled={connecting}>{connecting ? "Waiting for wallet…" : "Connect wallet"}</button> : (
+          <div className="account-row">
+            <div><span className="field-label">Connected account</span><strong title={walletAccount}>{shortenAccount(walletAccount)}</strong><span className="field-label">Chain ID: {walletChain}</span></div>
+            <button className="secondary" onClick={disconnectWallet}>Disconnect</button>
           </div>
         )}
-        {error && <div className="notice error" role="alert">{error}</div>}
+        {walletAccount && !isTestnet && <div className="notice warning" role="alert">Wrong network. Authorization is blocked until Hedera Testnet (chain ID 296) is verified.</div>}
+        {walletAccount && !isTestnet && <button className="secondary switch-button" onClick={switchToTestnet}>Switch to Hedera Testnet</button>}
+        {walletMessage && <p className="quiet wallet-message" role="status">{walletMessage}</p>}
+        <div className="permission-box">
+          <div className="permission-title"><span className="permission-icon">✓</span><div><strong>Limited payment permission</strong><p>One explicit approval · One allowlisted resource · No background spending</p></div></div>
+          <dl className="limits">
+            <div><dt>Network</dt><dd>Hedera Testnet only</dd></div>
+            <div><dt>Maximum per invocation</dt><dd>{MAX_PAYMENT_HBAR} HBAR</dd></div>
+            <div><dt>Resource</dt><dd><code>{ALLOWED_RESOURCE}</code></dd></div>
+            <div><dt>Private-key access</dt><dd>Never granted to the frontend or AI</dd></div>
+          </dl>
+          <label className={`consent ${!isTestnet ? "disabled" : ""}`}>
+            <input type="checkbox" checked={permissionApproved} disabled={!walletAccount || !isTestnet} onChange={(e) => setPermissionApproved(e.target.checked)} />
+            <span>I approve this limited permission for a single task on Hedera Testnet.</span>
+          </label>
+          <p className="security-note">{permissionApproved ? "Consent recorded in this page only. It resets when you disconnect or change network; it does not submit a transaction." : "Connect a wallet and verify Hedera Testnet before this permission can be selected."}</p>
+        </div>
       </section>
+
+      {error && <div className="notice error" role="alert">{error}</div>}
 
       <section className="grid" aria-label="Project capabilities">
-        <article className="feature-card">
-          <span className="number">01</span>
-          <h2>Autonomous x402</h2>
-          <p>A client discovers a price and completes a paid HTTP request without a checkout page.</p>
-          <span className="status">NEXT: PAYMENT PROOF</span>
-        </article>
-        <article className="feature-card">
-          <span className="number">02</span>
-          <h2>Spending firewall</h2>
-          <p>Budgets, provider allowlists, and per-request caps are checked before the agent pays.</p>
-          <span className="status">PLANNED</span>
-        </article>
-        <article className="feature-card">
-          <span className="number">03</span>
-          <h2>Verifiable audit</h2>
-          <p>Payment receipts and policy decisions will be linked to verifiable Hedera evidence.</p>
-          <span className="status">PLANNED</span>
-        </article>
+        <article className="feature-card"><span className="number">01</span><h2>Autonomous x402</h2><p>A client discovers a price and completes a paid HTTP request through the configured facilitator.</p><span className="status">TESTNET DEMO</span></article>
+        <article className="feature-card"><span className="number">02</span><h2>Spending firewall</h2><p>Per-payment caps, a daily budget, and attempt limits are checked before the agent signs.</p><span className="status">IMPLEMENTED · LOCAL LEDGER</span></article>
+        <article className="feature-card"><span className="number">03</span><h2>Explicit authorization</h2><p>Wallet identity and network are checked before the UI permits limited consent. No unrestricted wallet access.</p><span className="status">PHASE 4 · UI CONSENT ONLY</span></article>
       </section>
 
-      <footer>
-        <span>heder1 · ETHGlobal Mumbai preparation</span>
-        <span>Testnet only · Never put secrets in frontend code</span>
-      </footer>
+      <footer><span>heder1 · ETHGlobal Mumbai preparation</span><span>Testnet only · Never put secrets in frontend code</span></footer>
     </main>
   );
 }
