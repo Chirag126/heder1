@@ -2,33 +2,123 @@
 
 **Security-first autonomous AI-agent payments on Hedera using x402.**
 
-heder1 demonstrates a fixed-price HTTP resource protected by the x402 v2 payment flow on **Hedera testnet**. A client receives an HTTP 402 challenge, creates a payment payload using the configured payer, and retries the request. The API asks the configured facilitator to verify and settle the payment, and returns the protected resource only when settlement reports success with a transaction ID.
+heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can access paid HTTP resources while operating within explicit spending limits and wallet authorization rules.
 
-> **Status:** The end-to-end paid-resource demo has returned HTTP 200 with a facilitator-reported settlement transaction on Hedera testnet. Verify transaction details on HashScan for independent confirmation. Typecheck and production builds have passed locally. The Phase 3 spending firewall now adds a persistent local reservation ledger, a fixed per-payment cap, a UTC-day budget, and a daily attempt limit. The local JSON ledger is single-process only; multi-instance deployment requires a transactional shared database.
+The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
+
+> **Current status:** Phases 0–6 have been implemented in the project workflow. The HCS testnet verification described below succeeded for the documented topic message. Run the latest tests, typecheck, and build after pulling the final changes. This remains a prototype, not a production-ready payment infrastructure.
+
+## Table of contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Safety and payment limits](#safety-and-payment-limits)
+- [Technology stack](#technology-stack)
+- [Prerequisites](#prerequisites)
+- [Installation and configuration](#installation-and-configuration)
+- [Run the application](#run-the-application)
+- [Phase 1: x402 paid resource](#phase-1-x402-paid-resource)
+- [Phase 2: autonomous payment agent](#phase-2-autonomous-payment-agent)
+- [Phase 3: spending firewall](#phase-3-spending-firewall)
+- [Phase 4: wallet authorization](#phase-4-wallet-authorization)
+- [Phase 5: verifiable audit trail and HCS](#phase-5-verifiable-audit-trail-and-hcs)
+- [Phase 6: live product dashboard](#phase-6-live-product-dashboard)
+- [Validation and testing](#validation-and-testing)
+- [Limitations and future work](#limitations-and-future-work)
+- [Official references](#official-references)
+- [License](#license)
+
+## Features
+
+- **x402 payments:** handle HTTP 402 payment challenges and retry paid-resource requests.
+- **Autonomous agent:** execute a bounded payment task against an allowlisted local resource.
+- **Spending firewall:** enforce per-payment caps, a daily budget, and a daily attempt limit.
+- **Wallet authorization:** verify a wallet-signed challenge and issue a short-lived, single-use authorization grant.
+- **Tamper-evident audit log:** link local JSONL records using a SHA-256 hash chain.
+- **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
+- **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
+- **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
+
+## Architecture
+
+```text
+Wallet / Dashboard
+        |
+        v
+Fastify API
+        |
+        +--> Wallet authorization challenge and verification
+        |
+        +--> Autonomous agent
+        |       |
+        |       +--> Spending firewall
+        |       |
+        |       +--> x402 HTTP 402 challenge / retry
+        |                    |
+        |                    v
+        |             Configured facilitator
+        |
+        +--> Local SHA-256 hash-chained audit log
+        |                    |
+        |                    v
+        |             Hedera Testnet HCS
+        |                    |
+        |                    v
+        |             Public Mirror Node verification
+        |
+        +--> Dashboard status, history, and evidence APIs
+```
+
+The facilitator handles the x402 verification and settlement flow. HCS anchors audit hashes; it does not store the entire local audit log or independently establish that an underlying payment or event was truthful.
 
 ## Safety and payment limits
 
-- **Testnet only.** The paid-resource client refuses to run unless `HEDERA_NETWORK=testnet`.
-- Fixed price: **100,000 tinybars = 0.001 HBAR** per paid-resource request.
-- The recipient is configured by `HEDERA_RECEIVER_ACCOUNT_ID` (default `0.0.11044329`).
-- The facilitator is configured by `HEDERA_X402_FACILITATOR_URL` (default `https://api.testnet.blocky402.com`).
-- Never commit `.env` files, private keys, seed phrases, or funded-wallet credentials. Never use mainnet keys for this demo.
-- The direct demo-payment endpoint is separate from the HTTP 402 flow. It is disabled by default and must remain local-only.
-- The paid-resource route's duplicate-proof protection is **in-memory only**; it is not durable across restarts or multiple instances. Do not treat this prototype as production-ready.
+| Control | Current policy |
+|---|---|
+| Network | Hedera Testnet |
+| Maximum payment | 100,000 tinybars (0.001 HBAR) |
+| Daily reserved budget | 1,000,000 tinybars (0.01 HBAR) |
+| Daily attempt limit | 10 |
+| Agent resource | Exact allowlisted local paid-resource route |
+| Agent execution | Disabled by default |
+| Direct demo-payment endpoint | Disabled by default |
+| Wallet authorization | Short-lived, single-use grant |
+| Local firewall and audit storage | Single-process prototype |
 
-## Stack
+Important security rules:
 
-- TypeScript, React + Vite, Node.js + Fastify, pnpm workspace
-- `@x402/core`, `@x402/fetch`, `@x402/hedera`
-- Hedera testnet and a compatible x402 facilitator
+- Never commit `.env` files, private keys, seed phrases, wallet credentials, or payment proofs.
+- Do not put secrets in frontend code, README files, screenshots, logs, or public issues.
+- Use dedicated testnet accounts and rotate credentials that have been exposed.
+- Keep the API bound to localhost during local payment testing.
+- Do not enable the agent or demo-payment endpoint in production.
+- A facilitator-reported settlement is not independent proof of a confirmed on-chain transfer. Verify transaction details on HashScan.
+- HCS anchoring provides independently inspectable hash evidence, not a production security certification.
+
+## Technology stack
+
+- TypeScript
+- React and Vite
+- Node.js and Fastify
+- pnpm workspaces
+- x402 SDK packages: `@x402/core`, `@x402/fetch`, and `@x402/hedera`
+- Hedera Testnet
+- Hedera SDK: `@hiero-ledger/sdk`
+- EVM wallet provider for signed authorization
+- SHA-256 hash-chained JSONL audit log
 
 ## Prerequisites
 
 - Node.js 24 or newer
-- Git and pnpm 10
+- Git
+- pnpm 10
 - VS Code (recommended)
+- A Hedera Testnet account for testnet payment functionality
+- An EVM-compatible wallet that supports Hedera Testnet for wallet authorization
 
-## Local setup
+## Installation and configuration
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/Chirag126/heder1.git
@@ -37,104 +127,314 @@ npm install --global pnpm@10
 pnpm install
 ```
 
-Copy `services/api/.env.example` to `services/api/.env`, then fill in your own **Hedera testnet ECDSA payer credentials** locally:
+Create a local API environment file by copying the example:
+
+**Windows CMD:**
+
+```cmd
+copy services\api\.env.example services\api\.env
+```
+
+Fill in the appropriate values in `services/api/.env`. Never commit this file.
+
+Example configuration:
 
 ```dotenv
 HEDERA_NETWORK=testnet
 HEDERA_CLIENT_ACCOUNT_ID=0.0.YOUR_TESTNET_PAYER_ACCOUNT
 HEDERA_CLIENT_PRIVATE_KEY=YOUR_TESTNET_ECDSA_PRIVATE_KEY
-HEDERA_RECEIVER_ACCOUNT_ID=0.0.11044329
+HEDERA_RECEIVER_ACCOUNT_ID=0.0.YOUR_TESTNET_RECEIVER_ACCOUNT
 HEDERA_X402_FACILITATOR_URL=https://api.testnet.blocky402.com
 HEDERA_X402_DEMO_ENABLED=false
 HEDERA_AGENT_ENABLED=false
 HEDERA_X402_PAID_RESOURCE_URL=http://127.0.0.1:4000/api/x402/paid-resource
+
+HEDERA_AUDIT_HCS_ENABLED=false
+HEDERA_AUDIT_HCS_TOPIC_ID=
+HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID=
+HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY=
 ```
 
-Create/fund testnet accounts through the [Hedera Portal](https://portal.hedera.com/). Do not paste private keys into issues, chat, logs, or source files.
+Use your own testnet account IDs and private keys locally. The example values above are placeholders; do not paste actual keys into this README.
 
-Start both apps:
+Create and fund testnet accounts through the [Hedera Portal](https://portal.hedera.com/).
+
+## Run the application
+
+Start the web dashboard and API using the repository's development script:
 
 ```bash
 pnpm dev
 ```
 
-- Web dashboard: http://localhost:5173
+Default local endpoints:
+
+- Dashboard: http://localhost:5173
 - API health: http://localhost:4000/api/health
-- x402 configuration status: http://localhost:4000/api/x402/status
+- x402 status: http://localhost:4000/api/x402/status
+- Agent status: http://localhost:4000/api/agent/status
+- Audit integrity: http://localhost:4000/api/audit/status
+- HCS anchor index: http://localhost:4000/api/audit/anchors
 
-## Run the paid-resource demo
+The dashboard reads status and audit information from the backend. Backend configuration and persisted local data determine the actual status; a frontend display alone is not proof that a payment settled.
 
-Ensure the API is running locally and the facilitator is reachable. The client uses the payer credentials from `services/api/.env` and may make a **0.001 HBAR testnet payment** when the challenge is accepted.
+## Phase 1: x402 paid resource
+
+The paid-resource endpoint returns an HTTP 402 challenge when a request does not contain the required payment proof. The client processes the challenge, creates the payment payload using the configured payer, and retries the request.
+
+The backend returns the protected resource only after the configured facilitator reports successful verification and settlement, including a transaction ID.
+
+Endpoint:
+
+```text
+GET /api/x402/paid-resource
+```
+
+Run the demo from the repository root:
 
 ```bash
 pnpm --filter @heder1/api demo:paid-resource
 ```
 
-A successful response should include HTTP status `200`, resource `heder1-demo-report`, payment status `settled`, a transaction ID, and a HashScan URL. Open the URL and verify the transaction status and transfer details. Do not treat a facilitator response alone as independent chain verification.
+**Payment warning:** the client may make a 0.001 HBAR testnet payment. Only run it when you intend to make that payment and your testnet configuration is correct.
 
-## Phase 2: bounded autonomous payment agent
+A successful response should include HTTP 200, the protected resource, settlement information, and a transaction reference. Verify the returned transaction independently on [HashScan Testnet](https://hashscan.io/testnet).
 
-The local agent can discover and evaluate its configured paid resource, then perform the x402 HTTP 402 challenge/retry automatically under a fixed policy. It is intentionally limited to the exact local route `/api/x402/paid-resource`, Hedera testnet, the configured receiver, native HBAR, and **at most 0.001 HBAR**. Remote URLs, alternate paths, query strings, and credentials in URLs are rejected. The agent is disabled by default and refuses to run in production.
+The paid-resource duplicate-proof protection is in-memory and is not durable across restarts or multiple instances.
 
-1. Start the API locally with `pnpm dev`.
-2. In `services/api/.env`, set `HEDERA_AGENT_ENABLED=true` and keep `HEDERA_NETWORK=testnet`.
-3. Check policy/status without paying:
+## Phase 2: autonomous payment agent
+
+The agent can evaluate its configured target and perform the x402 challenge/retry flow within a restrictive policy.
+
+The policy restricts the agent to:
+
+- Hedera Testnet
+- The exact local resource path `/api/x402/paid-resource`
+- The configured receiver
+- Native HBAR
+- A maximum payment of 0.001 HBAR
+- A locally configured resource URL without query strings or credentials
+
+Check the agent status without making a payment:
 
 ```cmd
 curl http://localhost:4000/api/agent/status
 ```
 
-4. Run one agent task:
+Agent execution is disabled by default. For a deliberate local testnet run only, set:
 
-```cmd
-curl -X POST http://localhost:4000/api/agent/run
+```dotenv
+HEDERA_AGENT_ENABLED=true
+HEDERA_NETWORK=testnet
 ```
 
-**Payment warning:** an enabled run can send one **0.001 HBAR testnet payment**. The agent is not a background scheduler and this first version only handles one allowlisted resource. Keep the API bound to localhost, never enable it in production, and set `HEDERA_AGENT_ENABLED=false` when finished. A facilitator-reported transaction still needs independent HashScan verification.
+The run endpoint is:
 
-## Phase 3: spending firewall\n\nBefore the autonomous agent creates a signer or starts the x402 payment flow, it reserves the intended spend in a local persistent ledger. The firewall currently enforces:\n\n- Maximum **100,000 tinybars (0.001 HBAR)** per payment.\n- Maximum **1,000,000 tinybars (0.01 HBAR)** reserved per UTC day.\n- Maximum **10 payment attempts per UTC day**.\n- Exact local API port `4000`, exact paid-resource path, and a syntactically valid Hedera receiver account ID.\n- A fail-closed policy if the ledger is corrupt or cannot be read.\n- A conservative reservation: failed or ambiguous attempts remain counted, preventing repeated retries from silently exceeding the budget.\n\nThe ledger is stored at `services/api/data/spending-firewall.json` by default and is ignored by Git. The status endpoint reports the active limits at `GET /api/agent/status`. This first version serializes concurrent reservations within one Node.js process; it is **not safe for multiple API instances or multiple hosts**. Use a transactional shared database before scaling or deploying publicly. The firewall does not replace facilitator verification, chain verification, or a production security review.\n\n## Optional direct payment endpoint
-
-This is a separate local-only test endpoint and is not needed for the paid-resource demo. It can send **0.001 HBAR** from the configured payer.
-
-1. Keep the API bound to localhost.
-2. Set `HEDERA_X402_DEMO_ENABLED=true` in `services/api/.env` and restart the API.
-3. Explicitly confirm the test payment from CMD:
-
-```cmd
-curl -X POST http://localhost:4000/api/x402/demo-payment -H "Content-Type: application/json" -d "{\"confirmPayment\":true}"
+```text
+POST /api/agent/run
 ```
 
-4. Verify any returned transaction ID on [HashScan Testnet](https://hashscan.io/testnet).
-5. Set `HEDERA_X402_DEMO_ENABLED=false` again.
+A valid single-use wallet authorization grant is required. An enabled run can spend testnet HBAR, so do not invoke it casually. Set `HEDERA_AGENT_ENABLED=false` again when testing is complete.
 
-Never expose this endpoint publicly or enable it in production.
+## Phase 3: spending firewall
 
-## Validation
+Before the agent creates a signer or begins the payment flow, the spending firewall reserves the proposed spend in a persistent local ledger.
+
+Current limits:
+
+- Maximum 100,000 tinybars (0.001 HBAR) per payment.
+- Maximum 1,000,000 tinybars (0.01 HBAR) reserved per UTC day.
+- Maximum 10 payment attempts per UTC day.
+- Exact local API port `4000` and allowlisted paid-resource path.
+- Syntactically valid Hedera receiver account ID.
+- Fail-closed behavior when the ledger is malformed or unreadable.
+- Failed or ambiguous attempts remain counted to avoid repeated retries silently exceeding the budget.
+
+Default ledger path:
+
+```text
+services/api/data/spending-firewall.json
+```
+
+The ledger location can be overridden with `HEDERA_FIREWALL_LEDGER_PATH`.
+
+The API exposes the firewall policy through:
+
+```text
+GET /api/agent/status
+```
+
+**Limitation:** reservation serialization protects concurrent calls within one Node.js process. The local JSON ledger is not safe for multiple API instances or hosts. Use a transactional shared database before scaling or deploying publicly.
+
+## Phase 4: wallet authorization
+
+The dashboard supports wallet connection through an EVM-compatible provider and verifies Hedera Testnet chain ID `296` (`0x128`).
+
+The authorization flow:
+
+1. Connect a compatible wallet and verify the network.
+2. Explicitly approve the limited, one-run permission in the dashboard.
+3. Request a short-lived challenge from the API.
+4. Sign the challenge using the wallet's `personal_sign` method.
+5. Submit the challenge nonce and signature for server-side verification.
+6. Receive a short-lived, single-use authorization grant.
+7. Present the grant to the agent-run endpoint.
+
+The API verifies the wallet signature and consumes the grant before invoking the agent. A valid grant does not override the server's `HEDERA_AGENT_ENABLED` switch.
+
+Security boundaries:
+
+- The frontend never requests or stores a wallet private key or seed phrase.
+- The wallet signature proves control of the signing address; it does not expose the private key to heder1.
+- The authorization store is in-memory and single-process. Restarting the API invalidates outstanding grants.
+- Multi-instance deployment requires shared atomic storage, rate limiting, and additional security review.
+- Wallet support depends on the wallet's compatibility with Hedera Testnet EVM chain ID 296.
+- This authorization layer is a prototype and should not be exposed publicly without reviewing origin/CSRF protections, persistence, rate limiting, and wallet/account mapping.
+
+## Phase 5: verifiable audit trail and HCS
+
+### Local hash-chained audit trail
+
+The API records security-relevant events, including wallet authorization outcomes, agent-run results, payment attempts, rejections, and settlement references.
+
+The local append-only JSONL records contain sequence numbers, timestamps, event/outcome details, and SHA-256 hashes linked to previous records.
+
+Default location:
+
+```text
+services/api/data/audit-trail.jsonl
+```
+
+Override the location with `HEDERA_AUDIT_LOG_PATH`.
+
+The API provides:
+
+```text
+GET /api/audit/status
+GET /api/audit/records?limit=30
+```
+
+The status endpoint validates the hash chain and reports its record count and head hash. The records endpoint returns a bounded, sanitized view and refuses to return records if integrity verification fails.
+
+The log avoids storing raw payment payloads, wallet signatures, private keys, and seed phrases. The local file remains single-process storage; a host operator with write access can delete or replace it. Hash chaining is not a substitute for independent anchoring or a durable production audit system.
+
+### Optional HCS anchoring
+
+Optional Hedera Consensus Service anchoring is available behind an explicit opt-in. When enabled, each local audit record's SHA-256 hash is published as a compact JSON message to the configured Hedera Testnet topic.
+
+Configure these settings locally:
+
+```dotenv
+HEDERA_AUDIT_HCS_ENABLED=true
+HEDERA_AUDIT_HCS_TOPIC_ID=0.0.YOUR_TESTNET_TOPIC
+HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID=0.0.YOUR_TESTNET_OPERATOR
+HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY=YOUR_TESTNET_OPERATOR_PRIVATE_KEY
+```
+
+Use a dedicated, least-privilege testnet operator where possible. If the HCS-specific operator credentials are left blank, the implementation may fall back to the configured x402 payer credentials. Keep credentials private.
+
+HCS anchoring is disabled by default. Each audit append may create a separate HCS transaction and incur fees. If anchoring fails after the local event has been persisted, reconcile the result rather than assuming the event was not recorded.
+
+The API provides:
+
+```text
+GET /api/audit/anchors
+GET /api/audit/verify-hcs?topicId=0.0.x&sequenceNumber=123&auditHash=EXPECTED_SHA256_HASH
+```
+
+The verification endpoint queries the public Hedera Testnet Mirror Node and compares the decoded message with the expected audit hash.
+
+### Live testnet verification evidence
+
+A testnet anchor was successfully checked against the public Mirror Node.
+
+- **Network:** Hedera Testnet
+- **Topic ID:** `0.0.11115485`
+- **Sequence number:** `1`
+- **Audit sequence:** `39`
+- **Hash algorithm:** SHA-256
+- **Verification result:** `valid: true`
+- **Expected hash matched anchored hash:** Yes
+
+Public Mirror Node message:
+
+https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/1
+
+The local verification endpoint returned `valid: true`, and the expected audit-record hash matched the hash decoded from the public HCS message.
+
+This confirms that the specified audit hash was anchored and matched the public topic message. It does **not** establish that the underlying event was truthful or that a payment occurred. HCS stores the audit hash and minimal anchoring metadata, not the full local audit record.
+
+Private keys, seed phrases, wallet signatures, and payment proofs must never be included in the README or committed to the repository.
+
+## Phase 6: live product dashboard
+
+The dashboard connects to the Fastify API to display live backend state rather than relying only on static labels.
+
+### Dashboard capabilities
+
+- **System status:** API health, network, and x402 configuration status.
+- **Agent status:** enabled/disabled state and current spending-firewall limits.
+- **Spending policy:** maximum payment, daily budget, attempt limit, allowlisted resource, and ledger limitations.
+- **Wallet authorization:** connect wallet, verify Hedera Testnet, approve a limited permission, sign a one-time challenge, and request an authorized agent run.
+- **Audit integrity:** local hash-chain status, record count, and recent sanitized activity.
+- **HCS evidence:** indexed topic anchors, public Mirror Node links, and expected-hash verification controls.
+- **Transaction references:** HashScan links where the backend recorded a transaction reference.
+- **UI states:** manual refresh, loading indicators, errors, and empty states.
+
+Run the dashboard and API:
 
 ```bash
+pnpm dev
+```
+
+Open:
+
+http://localhost:5173
+
+The dashboard uses the following API endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | API health |
+| `GET /api/x402/status` | x402 configuration and payment readiness |
+| `GET /api/agent/status` | Agent and firewall policy |
+| `POST /api/authorization/challenge` | Create a wallet-signing challenge |
+| `POST /api/authorization/verify` | Verify the signature and issue a grant |
+| `POST /api/agent/run` | Execute one authorized agent task if enabled |
+| `GET /api/audit/status` | Verify local audit integrity |
+| `GET /api/audit/records?limit=30` | Retrieve sanitized audit history |
+| `GET /api/audit/anchors` | List locally indexed HCS anchors |
+| `GET /api/audit/verify-hcs` | Verify a hash against a public Mirror Node message |
+
+**Safety boundary:** the agent remains disabled by default. If explicitly enabled for local testnet development, an authorized run may spend up to 0.001 HBAR. The dashboard cannot override backend policy. The local audit log and spending firewall are not multi-instance safe, and a transaction link should be independently checked before treating it as proof of settlement.
+
+## Validation and testing
+
+Install dependencies first, then run the repository checks:
+
+```bash
+pnpm --filter @heder1/api test
 pnpm typecheck
 pnpm build
 ```
 
-These checks validate types and builds; they do not replace automated tests or on-chain verification.
+These commands test the API and validate types/builds. They do not independently prove that a live payment settled or that every HCS transaction can be verified.
 
-## Development status
+For a payment demo, verify the returned transaction on HashScan. For HCS anchoring, inspect the public Mirror Node message and confirm that the expected audit hash matches.
 
-- [x] Repository foundation, dashboard shell, and Fastify health endpoint
-- [x] x402 SDK dependencies and testnet payer configuration-status endpoint
-- [x] Configurable testnet receiver and facilitator
-- [x] Opt-in, fixed-amount direct facilitator-backed testnet payment endpoint
-- [x] HTTP 402 paid-resource challenge and automatic client retry
-- [x] Strict client-side policy for testnet, exact scheme, native HBAR, configured receiver, and fixed amount
-- [x] Facilitator verification and settlement before protected resource response
-- [x] Local end-to-end demo returned HTTP 200 with a settlement transaction ID
-- [x] Automated x402 tests for challenge, invalid proofs, facilitator errors, and successful mocked settlement
-- [x] Phase 2 bounded autonomous agent with target allowlist, testnet-only policy, and fixed 0.001 HBAR cap
-- [ ] Automated end-to-end agent run against a mocked local service in CI
-- [x] Phase 3 spending firewall: persistent local ledger, per-payment cap, daily budget, daily attempt limit, and fail-closed ledger validation\n- [ ] Shared transactional ledger for multi-instance deployments\n- [ ] Durable replay protection for paid-resource proofs and persistent settlement audit trail
-- [ ] Optional HCS audit records
-- [ ] Public deployment and deployment security review
-- [ ] Demo video (5 minutes or less)
+## Limitations and future work
+
+The current implementation is a testnet prototype. Important remaining hardening work includes:
+
+- Shared transactional storage for firewall reservations and authorization grants.
+- Durable replay protection for paid-resource proofs.
+- Multi-instance-safe audit storage and operational recovery.
+- Rate limiting, origin/CSRF controls, and deployment-specific wallet/account mapping.
+- More end-to-end integration testing and failure-path testing.
+- Production deployment review, monitoring, and secrets management.
+- Demo video and final submission documentation.
+
+Do not describe the project as production-ready until these limitations have been addressed and reviewed.
 
 ## Official references
 
@@ -143,108 +443,9 @@ These checks validate types and builds; they do not replace automated tests or o
 - [Hedera x402 TypeScript package](https://www.npmjs.com/package/@x402/hedera)
 - [Blocky402 quickstart and facilitator API](https://blocky402.com/docs/quickstart/)
 - [Exact Hedera scheme specification](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_hedera.md)
+- [Hedera Testnet Mirror Node](https://testnet.mirrornode.hedera.com/)
+- [HashScan Testnet](https://hashscan.io/testnet)
 
 ## License
 
 To be selected before public release.
-
-
-## Phase 4 — Wallet and authorization UI
-
-The web app includes an EVM-provider wallet connection flow, connected account display, Hedera Testnet chain-ID verification (296 / `0x128`), a network-switch request, and a limited-consent panel describing the one-resource, 0.001 HBAR-per-invocation policy.
-
-### Important security boundary
-
-- The browser never requests, receives, or stores a private key or seed phrase.
-- Wallet connection is used for account display and network verification; this change does not submit transactions.
-- The checkbox is **page-local consent UI only**. It resets on disconnect/network change and is not a server-issued authorization token.
-- This UI consent is not yet wired to authorize `POST /api/agent/run`. The backend agent remains separately disabled by default and uses its configured server-side testnet signer when enabled. Keep `HEDERA_AGENT_ENABLED=false` unless deliberately running the local testnet demo.
-- An EVM-compatible provider is required. Wallet behavior depends on the wallet's support for Hedera Testnet EVM chain ID 296 and `wallet_switchEthereumChain`.
-- Before production use, add a server-verified, short-lived, one-time authorization grant bound to a wallet signature and payment policy; never trust a frontend checkbox as an authorization boundary.
-
-
-### Phase 4 server-side authorization enforcement
-
-The dashboard now asks the wallet to sign a server-generated, short-lived challenge using `personal_sign`. The API recovers and validates the signing address, consumes the challenge once, and issues a short-lived single-use bearer grant scoped to one agent invocation. `POST /api/agent/run` rejects calls without that grant before invoking the agent. The grant is consumed before the agent is called, including failed runs, to avoid reusing authorization.
-
-- Challenge scope is fixed to Hedera Testnet chain ID 296, one agent run, the allowlisted paid resource, and the existing 0.001 HBAR per-payment ceiling.
-- The wallet signature proves control of the wallet address; it does not expose a private key to heder1.
-- The grant and challenge stores are **in-memory and single-process only**. Restarting the API invalidates outstanding grants, and multi-instance deployment must use a shared, atomic, durable store plus rate limiting.
-- The backend agent remains disabled unless `HEDERA_AGENT_ENABLED=true` in local testnet development and `HEDERA_NETWORK=testnet`. A valid wallet grant does not override this switch.
-- The wallet authorization layer is a local prototype. Do not expose these endpoints publicly or treat them as production-ready until persistence, origin/CSRF controls, rate limiting, and deployment-specific wallet/account mapping have been reviewed.
-
-
-## Phase 5 — Verifiable audit trail (local prototype)
-
-The API now records wallet authorization challenges and grants, authorization rejections, agent-run outcomes, payment attempts, payment rejections, and facilitator-reported settlement references in a local append-only JSONL file. Each record includes a sequence number, timestamp, event/outcome, and SHA-256 hash linked to the previous record. The API exposes `GET /api/audit/status` to validate the chain and return its record count and head hash.
-
-- Default path: `services/api/data/audit-trail.jsonl`; override with `HEDERA_AUDIT_LOG_PATH`. The local data directory is ignored by Git.
-- Settlement records include the payment proof hash, fixed amount, configured receiver, network, transaction reference, and settlement timestamp. Raw payment payloads, signatures, private keys, and seed phrases are not written to the audit trail.
-- A malformed or tampered existing chain fails closed for further audit appends.
-- The file is serialized within one Node.js process. It is **not multi-process/multi-host safe**, and an operator with write access can delete or replace the file. The local hash chain is tamper-evident for edits that are checked against the retained chain, but it is not an independent external anchor.
-- **Hedera Consensus Service (HCS) anchoring is not enabled in this change.** To claim independent evidence, a follow-up should publish audit record hashes to a configured HCS topic using a separately controlled testnet operator, retain HCS sequence/consensus timestamps, and test verification against a Mirror Node. Do not claim HCS logging or independent anchoring until that integration is implemented and verified.
-- Do not deploy this local audit store publicly as a production audit system. A durable transactional store, access controls, retention/export policy, and optional HCS anchoring require separate review.
-
-
-### Phase 5 follow-up — optional HCS anchoring and Mirror Node verification
-
-Optional Hedera Consensus Service anchoring is now implemented behind an explicit opt-in. When `HEDERA_AUDIT_HCS_ENABLED=true`, each local audit record's SHA-256 hash is submitted as a compact JSON message to the configured Hedera **Testnet** topic. The local event itself remains in the JSONL file; only its hash and minimal sequence metadata are anchored on-chain. This incurs HCS transaction fees and should use a dedicated, least-privilege testnet operator.
-
-Required settings:
-- `HEDERA_AUDIT_HCS_ENABLED=true`
-- `HEDERA_AUDIT_HCS_TOPIC_ID=0.0.x` (a topic you created and control)
-- `HEDERA_AUDIT_HCS_OPERATOR_ACCOUNT_ID` and `HEDERA_AUDIT_HCS_OPERATOR_PRIVATE_KEY` (dedicated testnet operator recommended; if blank, the existing x402 payer credentials are used)
-
-The feature is disabled by default. With it disabled, normal local audit behavior remains unchanged. When enabled, each audit append attempts a separate HCS message, so authorization and payment-related events can create multiple HCS transactions. If HCS submission fails, the local record may already be persisted; treat the operation as requiring reconciliation rather than assuming no event was recorded.
-
-To verify a published anchor independently, call:
-`GET /api/audit/verify-hcs?topicId=0.0.x&sequenceNumber=123&auditHash=<64-character-record-hash>`.
-The API queries the public Hedera Testnet Mirror Node and compares the decoded message with the expected audit hash. The response includes the Mirror Node URL for independent inspection. The caller must obtain the audit record hash and HCS topic sequence number from the submission response/logs or the public topic messages; do not treat a local API response alone as proof.
-
-Automated tests cover matching and mismatching Mirror Node messages without submitting a real HCS transaction. A live end-to-end anchor has not been run by CI. Before claiming a verified live deployment, configure a testnet topic/operator, submit one harmless test anchor, and independently confirm the message on the public Mirror Node.
-
-## Hedera Consensus Service (HCS) Audit Anchoring
-
-Heder1 anchors SHA-256 hashes of local audit records to the Hedera Testnet Consensus Service (HCS). This provides a public, independently verifiable reference for checking whether an audit-record hash matches the hash committed to the topic.
-
-### Testnet verification evidence
-
-- **Network:** Hedera Testnet
-- **Topic ID:** `0.0.11115485`
-- **Sequence number:** `1`
-- **Audit sequence:** `39`
-- **Algorithm:** SHA-256
-- **Verification result:** `valid: true`
-- **Expected hash matched anchored hash:** Yes
-
-**Public Mirror Node URL:**
-
-https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.11115485/messages/1
-
-**Verification API result:** The local Heder1 verification endpoint returned `valid: true`. The expected audit hash matched the hash decoded from the public HCS message.
-
-This demonstrates that the specified audit-record hash was anchored to the Hedera Testnet topic and successfully matched against the public Mirror Node message.
-
-### Security and limitations
-
-- Private keys, seed phrases, wallet signatures, and payment proofs must never be committed to the repository or README.
-- HCS stores the audit hash and anchoring metadata, not the complete local audit log.
-- Hash anchoring does not independently prove that a payment occurred or that the original audit event was truthful.
-- This evidence is from Hedera Testnet and is not a production-security certification.
-
-
-## Phase 6 — Live product dashboard
-
-The dashboard now reads current state from the Fastify API rather than relying only on static UI labels.
-
-- Live API and x402 configuration status, including configured payer/receiver account IDs where available.
-- Agent enablement and spending-firewall limits, including the local ledger's single-instance limitation.
-- Wallet connection, Hedera Testnet chain-ID verification, and server-verified one-time wallet authorization for an agent invocation.
-- Sanitized recent audit history via `GET /api/audit/records?limit=30`. The endpoint validates the local hash chain before returning records and omits detail keys that could contain nonces, signatures, tokens, proofs, or credentials.
-- HCS anchor index, public Mirror Node links, HashScan transaction links for recorded transaction references, and an interactive expected-hash verification form.
-- Manual refresh and loading/error/empty states.
-
-Run the dashboard and API together with `pnpm dev`; the dashboard is available at `http://localhost:5173`.
-
-**Safety boundary:** agent execution remains disabled by default. If explicitly enabled for local testnet development, an authorized run may spend up to 0.001 HBAR. The local audit history and firewall ledger are not multi-instance safe. A transaction link is only shown when the backend has recorded a transaction reference; a facilitator response is not a substitute for independent transaction verification.
-
