@@ -46,6 +46,8 @@ export async function appendAuditEvent(input: AuditInput): Promise<AuditRecord> 
   try {
     const path = auditPath();
     await mkdir(dirname(path), { recursive: true });
+    const integrity = await verifyAuditTrail(path);
+    if (!integrity.valid) throw new Error("Audit trail integrity check failed; refusing to append.");
     let sequence = 1;
     let previousHash: string | null = null;
     try {
