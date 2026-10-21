@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --env-file=.env --import tsx --watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file=.env dist/server.js",
+    "start": "node --env-file-if-exists=.env dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "demo:paid-resource": "node --env-file=.env --import tsx src/paid-resource-client.ts",
     "test": "node --import tsx --test src/*.test.ts"
