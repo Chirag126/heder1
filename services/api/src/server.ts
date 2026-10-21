@@ -4,7 +4,6 @@ import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } fr
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
-import { randomUUID } from "node:crypto";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
@@ -204,7 +203,7 @@ app.get("/api/agent/v2/services", async () => ({
   note: "Price metadata is informational only. The runner inspects each service's actual HTTP 402 requirements before selecting.",
 }));
 
-app.post<{ Body: AgentV2TaskInput }>("/api/agent/v2/run", async (request, reply) => {
+app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", async (request, reply) => {
   if (!isAgentV2Enabled()) {
     return reply.code(403).send({ error: "Agent v2 is disabled.", hint: "For local testnet testing only, set HEDERA_AGENT_V2_ENABLED=true and HEDERA_NETWORK=testnet. Never enable payment execution on public Render." });
   }
@@ -214,8 +213,10 @@ app.post<{ Body: AgentV2TaskInput }>("/api/agent/v2/run", async (request, reply)
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization first." });
   }
-  const input = request.body ?? ({} as AgentV2TaskInput);
-  const runId = randomUUID();
+  const input = request.body ?? ({} as AgentV2TaskInput & { runId?: string });
+  const runId = input.runId;
+  if (typeof runId !== "string" || !/^[0-9a-f-]{36}$/i.test(runId)) return reply.code(400).send({ error: "A client-generated UUID runId is required so the task can be cancelled while active." });
+  if (agentV2Runs.has(runId)) return reply.code(409).send({ error: "That runId is already active." });
   const controller = new AbortController();
   agentV2Runs.set(runId, controller);
   await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
