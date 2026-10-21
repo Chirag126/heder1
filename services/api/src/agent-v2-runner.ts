@@ -156,12 +156,20 @@ export async function runAgentV2Task(
     ));
 
   const paidFetch = wrapFetchWithPayment(fetch, client);
-  const response = await paidFetch(selected.service.url, {
-    method: "GET",
-    redirect: "error",
-    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-    headers: { accept: "application/json" },
-  });
+  let response: Response;
+  try {
+    response = await paidFetch(selected.service.url, {
+      method: "GET",
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      headers: { accept: "application/json" },
+    });
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error("Agent v2 was cancelled or timed out during payment delivery. Settlement may already have occurred; inspect audit records and HashScan before retrying.");
+    }
+    throw error;
+  }
   httpCalls += 2; // One challenge request and one payment-bearing retry.
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok || !isRecord(body) || !isRecord(body.payment)) {
@@ -174,7 +182,6 @@ export async function runAgentV2Task(
       body.amountTinybars !== selected.requirement.amount) {
     throw new Error("Selected service response failed resource, amount, or settlement-receipt validation.");
   }
-  if (signal.aborted) throw new Error("Agent v2 task was cancelled or exceeded its runtime limit after the service response.");
 
   const transactionId = payment.transaction.trim();
   const actual = selected.amountTinybars;
