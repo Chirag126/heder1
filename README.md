@@ -4,7 +4,7 @@
 
 heder1 demonstrates a fixed-price HTTP resource protected by the x402 v2 payment flow on **Hedera testnet**. A client receives an HTTP 402 challenge, creates a payment payload using the configured payer, and retries the request. The API asks the configured facilitator to verify and settle the payment, and returns the protected resource only when settlement reports success with a transaction ID.
 
-> **Status:** The end-to-end paid-resource demo has returned HTTP 200 with a facilitator-reported settlement transaction on Hedera testnet. Verify transaction details on HashScan for independent confirmation. Typecheck and production builds have passed locally. Automated integration tests, durable replay protection, audit persistence, and public deployment remain future work.
+> **Status:** The end-to-end paid-resource demo has returned HTTP 200 with a facilitator-reported settlement transaction on Hedera testnet. Verify transaction details on HashScan for independent confirmation. Typecheck and production builds have passed locally. The Phase 3 spending firewall now adds a persistent local reservation ledger, a fixed per-payment cap, a UTC-day budget, and a daily attempt limit. The local JSON ledger is single-process only; multi-instance deployment requires a transactional shared database.
 
 ## Safety and payment limits
 
@@ -92,7 +92,7 @@ curl -X POST http://localhost:4000/api/agent/run
 
 **Payment warning:** an enabled run can send one **0.001 HBAR testnet payment**. The agent is not a background scheduler and this first version only handles one allowlisted resource. Keep the API bound to localhost, never enable it in production, and set `HEDERA_AGENT_ENABLED=false` when finished. A facilitator-reported transaction still needs independent HashScan verification.
 
-## Optional direct payment endpoint
+## Phase 3: spending firewall\n\nBefore the autonomous agent creates a signer or starts the x402 payment flow, it reserves the intended spend in a local persistent ledger. The firewall currently enforces:\n\n- Maximum **100,000 tinybars (0.001 HBAR)** per payment.\n- Maximum **1,000,000 tinybars (0.01 HBAR)** reserved per UTC day.\n- Maximum **10 payment attempts per UTC day**.\n- Exact local API port `4000`, exact paid-resource path, and a syntactically valid Hedera receiver account ID.\n- A fail-closed policy if the ledger is corrupt or cannot be read.\n- A conservative reservation: failed or ambiguous attempts remain counted, preventing repeated retries from silently exceeding the budget.\n\nThe ledger is stored at `services/api/data/spending-firewall.json` by default and is ignored by Git. The status endpoint reports the active limits at `GET /api/agent/status`. This first version serializes concurrent reservations within one Node.js process; it is **not safe for multiple API instances or multiple hosts**. Use a transactional shared database before scaling or deploying publicly. The firewall does not replace facilitator verification, chain verification, or a production security review.\n\n## Optional direct payment endpoint
 
 This is a separate local-only test endpoint and is not needed for the paid-resource demo. It can send **0.001 HBAR** from the configured payer.
 
@@ -131,7 +131,7 @@ These checks validate types and builds; they do not replace automated tests or o
 - [x] Automated x402 tests for challenge, invalid proofs, facilitator errors, and successful mocked settlement
 - [x] Phase 2 bounded autonomous agent with target allowlist, testnet-only policy, and fixed 0.001 HBAR cap
 - [ ] Automated end-to-end agent run against a mocked local service in CI
-- [ ] Durable replay protection and persistent audit trail
+- [x] Phase 3 spending firewall: persistent local ledger, per-payment cap, daily budget, daily attempt limit, and fail-closed ledger validation\n- [ ] Shared transactional ledger for multi-instance deployments\n- [ ] Durable replay protection for paid-resource proofs and persistent settlement audit trail
 - [ ] Optional HCS audit records
 - [ ] Public deployment and deployment security review
 - [ ] Demo video (5 minutes or less)
