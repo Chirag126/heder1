@@ -7,6 +7,7 @@ import {
   FIREWALL_DAILY_BUDGET_TINYBARS,
   FIREWALL_MAX_ATTEMPTS_PER_DAY,
   reserveAgentSpend,
+  reserveAgentV2Spend,
 } from "./spending-firewall.js";
 
 const dirs: string[] = [];
@@ -36,6 +37,36 @@ test("firewall reserves an allowed payment persistently before signing", async (
   }
   const saved = JSON.parse(await readFile(path, "utf8"));
   assert.equal(saved.entries[0].reservedTinybars, 100000);
+});
+
+
+test("Phase 10 firewall reserves the lower-priced approved summary endpoint", async () => {
+  const path = await ledgerPath();
+  const result = await reserveAgentV2Spend({
+    amountTinybars: "50000",
+    receiverAccountId: "0.0.11044329",
+    resourceUrl: "http://127.0.0.1:4000/api/x402/summary",
+  }, { path, now });
+  assert.equal(result.allowed, true);
+  if (result.allowed) assert.equal(result.amountTinybars, "50000");
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.equal(saved.entries[0].reservedTinybars, 50000);
+});
+
+test("Phase 10 firewall rejects remote or unregistered service paths", async () => {
+  const path = await ledgerPath();
+  for (const resourceUrl of [
+    "https://example.com/api/x402/summary",
+    "http://127.0.0.1:4000/api/x402/not-registered",
+    "http://127.0.0.1:4000/api/x402/summary?url=http://example.com",
+  ]) {
+    const result = await reserveAgentV2Spend({
+      amountTinybars: "50000",
+      receiverAccountId: "0.0.11044329",
+      resourceUrl,
+    }, { path, now });
+    assert.equal(result.allowed, false, resourceUrl);
+  }
 });
 
 test("firewall rejects amounts above the per-payment cap", async () => {

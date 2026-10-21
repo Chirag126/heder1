@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   agentV2Policy,
   DEFAULT_AGENT_V2_LIMITS,
+  getApprovedServiceRegistry,
   parseX402Requirements,
   selectCheapestEligibleService,
   summarizeTaskPlan,
@@ -24,6 +25,23 @@ test("default plan is bounded to 0.005 HBAR, three paid calls and finite runtime
   assert.equal(DEFAULT_AGENT_V2_LIMITS.maxPaidCalls, 3);
   assert.equal(validateAgentV2Limits(DEFAULT_AGENT_V2_LIMITS).length, 0);
   assert.equal(agentV2Policy.enabledByDefault, false);
+});
+
+
+test("registry contains two distinct approved service manifests with informational prices", () => {
+  const registry = getApprovedServiceRegistry();
+  assert.equal(registry.length, 2);
+  assert.notEqual(registry[0]!.url, registry[1]!.url);
+  assert.equal(registry[0]!.priceMetadata?.amountTinybars, "100000");
+  assert.equal(registry[1]!.priceMetadata?.amountTinybars, "50000");
+  assert.ok(registry.every((service) => service.trust === "approved" && service.allowed));
+  assert.ok(registry.every((service) => service.networks.includes("hedera:testnet") && service.assetTypes.includes("HBAR")));
+});
+
+test("Phase 10 hard caps cannot be expanded by request input", () => {
+  assert.ok(validateAgentV2Limits({ ...DEFAULT_AGENT_V2_LIMITS, budgetTinybars: 500001 }).length > 0);
+  assert.ok(validateAgentV2Limits({ ...DEFAULT_AGENT_V2_LIMITS, maxPaidCalls: 4 }).length > 0);
+  assert.ok(validateAgentV2Limits({ ...DEFAULT_AGENT_V2_LIMITS, maxSteps: 9 }).length > 0);
 });
 
 test("planner rejects unbounded or excessive limits", () => {

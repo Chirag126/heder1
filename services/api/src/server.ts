@@ -1,9 +1,11 @@
 import Fastify from "fastify";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
-import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
+import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
+import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
+import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
-import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
+import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
@@ -76,14 +78,15 @@ app.get("/api/x402/status", async (_request, reply) => {
  * verification and settlement both succeed.
  */
 app.get("/api/x402/paid-resource", handlePaidResource);
+app.get("/api/x402/summary", handleShortSummaryResource);
 
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
-app.post<{ Body: { account?: string; chainId?: number } }>("/api/authorization/challenge", async (request, reply) => {
+app.post<{ Body: { account?: string; chainId?: number; scope?: string } }>("/api/authorization/challenge", async (request, reply) => {
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
-    const challenge = createAuthorizationChallenge(request.body.account);
+    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope);
     await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { account: request.body.account, chainId: 296, nonce: challenge.nonce, expiresAt: challenge.expiresAt } });
     return challenge;
   } catch (error) {
@@ -172,6 +175,80 @@ app.get("/api/agent/status", async () => ({
     multiInstanceSafe: false,
   },
 }));
+
+
+// Phase 10 cancellation is process-local and run IDs are unguessable UUIDs.
+// Restarting the API cancels all in-flight work.
+const agentV2Runs = new Map<string, AbortController>();
+const agentV2CompletedRuns = new Set<string>();
+
+app.get("/api/agent/v2/status", async () => ({
+  enabled: isAgentV2Enabled(),
+  policy: agentV2Policy,
+  registrySize: getApprovedServiceRegistry().length,
+  execution: "deterministic-local-testnet-only",
+  paymentExecutionEnabled: isAgentV2Enabled() && process.env.NODE_ENV !== "production",
+}));
+
+app.get("/api/agent/v2/services", async () => ({
+  services: getApprovedServiceRegistry().map((service) => ({
+    id: service.id,
+    url: service.url,
+    description: service.description,
+    networks: service.networks,
+    assetTypes: service.assetTypes,
+    trust: service.trust,
+    allowed: service.allowed,
+    priceMetadata: service.priceMetadata,
+  })),
+  note: "Price metadata is informational only. The runner inspects each service's actual HTTP 402 requirements before selecting.",
+}));
+
+app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", async (request, reply) => {
+  if (!isAgentV2Enabled()) {
+    return reply.code(403).send({ error: "Agent v2 is disabled.", hint: "For local testnet testing only, set HEDERA_AGENT_V2_ENABLED=true and HEDERA_NETWORK=testnet. Never enable payment execution on public Render." });
+  }
+  const input = request.body ?? ({} as AgentV2TaskInput & { runId?: string });
+  const runId = input.runId;
+  if (typeof runId !== "string" || !/^[0-9a-f-]{36}$/i.test(runId)) return reply.code(400).send({ error: "A client-generated UUID runId is required so the task can be cancelled while active." });
+  if (agentV2Runs.has(runId) || agentV2CompletedRuns.has(runId)) return reply.code(409).send({ error: "That runId has already been used." });
+  if (typeof input.goal !== "string" || !input.goal.trim() || input.goal.length > 2000) return reply.code(400).send({ error: "goal is required and must be at most 2000 characters." });
+  if (input.budgetTinybars !== undefined && typeof input.budgetTinybars !== "number") return reply.code(400).send({ error: "budgetTinybars must be a number." });
+  if (input.maxPaidCalls !== undefined && typeof input.maxPaidCalls !== "number") return reply.code(400).send({ error: "maxPaidCalls must be a number." });
+  if (input.allowedServiceIds !== undefined && (!Array.isArray(input.allowedServiceIds) || !input.allowedServiceIds.every((id) => typeof id === "string"))) return reply.code(400).send({ error: "allowedServiceIds must be an array of registered service IDs." });
+  const token = request.headers["x-heder1-authorization"];
+  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
+  if (!authorization.allowed) {
+    await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
+    return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization first." });
+  }
+  const controller = new AbortController();
+  agentV2Runs.set(runId, controller);
+  try {
+    await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
+    const result = await runAgentV2Task(input, { signal: controller.signal, runId });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "10", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
+    return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Agent v2 task failed.";
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "failed", details: { phase: "10", runId, account: authorization.account, error: reason } });
+    const status = /No approved service|No registered service|budgetTinybars|maximum|allowlist|No advertised/i.test(reason) ? 422 : 502;
+    return reply.code(status).send({ runId, agent: "heder1-autonomous-agent-v2", status: "stopped-safely", error: reason, paymentAttempted: /No approved service|No registered service|No advertised/i.test(reason) ? false : undefined });
+  } finally {
+    agentV2Runs.delete(runId);
+    agentV2CompletedRuns.add(runId);
+    if (agentV2CompletedRuns.size > 1000) agentV2CompletedRuns.delete(agentV2CompletedRuns.values().next().value as string);
+  }
+});
+
+app.post<{ Body: { runId?: string } }>("/api/agent/v2/cancel", async (request, reply) => {
+  const runId = request.body?.runId;
+  if (typeof runId !== "string" || !/^[0-9a-f-]{36}$/i.test(runId)) return reply.code(400).send({ cancelled: false, error: "A valid runId is required." });
+  const controller = agentV2Runs.get(runId);
+  if (!controller) return reply.code(404).send({ cancelled: false, error: "Run is not active or has already completed." });
+  controller.abort(new Error("Cancelled by user."));
+  return reply.code(202).send({ cancelled: true, runId, note: "Cancellation requested; an already submitted blockchain settlement may still complete. Check the final receipt." });
+});
 
 /**
  * Runs one bounded agent task. It may make one 0.001 HBAR testnet payment

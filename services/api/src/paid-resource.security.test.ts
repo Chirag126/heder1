@@ -76,7 +76,7 @@ test("identical concurrent payment proofs verify and settle only once", async ()
 
   const proof = Buffer.from(JSON.stringify({
     x402Version: 2,
-    accepted: { scheme: "exact", network: "hedera:testnet" },
+    accepted: { scheme: "exact", network: "hedera:testnet", amount: "100000", payTo: "0.0.11044329", asset: "0.0.0" },
     payload: { testNonce: randomUUID() },
   })).toString("base64");
   const first = makeReply();

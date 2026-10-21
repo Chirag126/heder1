@@ -1,53 +1,113 @@
 # Phase 10 — Autonomous agent v2
 
-## Status
+## Implementation status
 
-**Implementation foundation in progress; not accepted as complete.** This change adds deterministic task-limit validation, parsing of actual x402 v2 `accepts` requirements, and a policy function that selects the cheapest eligible candidate without letting an LLM authorize spending. It does not yet implement live multi-service discovery or a paid multi-service execution route.
+The multi-service deterministic runner is implemented in this branch, but Phase 10 is **not acceptance-complete until local tests, typecheck/build, and a real Hedera Testnet payment to the selected service are verified**.
 
-## Compatibility with Phases 0–9
+The runner adds a code-reviewed service registry with two local testnet endpoints, reads each service's actual HTTP 402 requirements, chooses the cheapest eligible offer deterministically, reserves the chosen spend through the persistent firewall, executes one bounded x402 payment, validates the returned settlement receipt, and reports actual expenditure.
 
-- Keeps the existing Phase 9 agent and paid-resource route unchanged.
-- Uses Hedera Testnet, native HBAR asset ID `0.0.0`, and the existing 100,000-tinybar per-payment firewall ceiling.
-- Preserves the existing wallet authorization requirement for payment execution.
-- Does not change Render environment flags; public payment execution must remain disabled.
-- Keeps the v2 planner side-effect-free: it cannot fetch URLs, create a signer, or initiate payments.
+## Registry
 
-## Policy defaults
+The registry is in `services/api/src/agent-v2.ts` and currently contains:
 
-| Limit | Default |
+| Service ID | Endpoint | Advertised hint | Resource |
+|---|---|---:|---|
+| `heder1-full-report` | `/api/x402/paid-resource` | 100,000 tinybars (0.001 HBAR) | `heder1-demo-report` |
+| `heder1-short-summary` | `/api/x402/summary` | 50,000 tinybars (0.0005 HBAR) | `heder1-short-summary` |
+
+These are two separate registered endpoints served by the local API for development/testing. Metadata prices are hints only. Selection uses each endpoint's actual x402 v2 `accepts` array, not registry hints. No user- or model-supplied URL is fetched. URLs are restricted to the exact local testnet host/port boundary.
+
+Inspect the registry:
+
+```cmd
+curl http://127.0.0.1:4000/api/agent/v2/services
+curl http://127.0.0.1:4000/api/agent/v2/status
+```
+
+## Deterministic limits
+
+| Limit | Default and hard ceiling |
 |---|---:|
-| Total budget | 500,000 tinybars (0.005 HBAR) |
-| Paid calls | 3 |
-| Planning/execution steps | 8 |
-| Runtime | 45 seconds |
-| Retries | 1 |
-| Attempts per service | 1 |
-| Network | `hedera:testnet` |
-| Asset | `0.0.0` (native HBAR) |
+| Total task budget | 500,000 tinybars (0.005 HBAR) |
+| Single payment | 100,000 tinybars (0.001 HBAR) |
+| Paid calls | 3 maximum; current planner executes at most one selected paid call |
+| Steps / total HTTP calls | 8 maximum |
+| Runtime | 45 seconds maximum |
+| Per-service attempts | 1 |
+| Extra task retries | At most 1; no retry loop is used |
+| Discovery timeout | 8 seconds per registered service |
+| Paid request timeout | 15 seconds, within the total runtime budget |
+| Network / asset | `hedera:testnet` / native HBAR asset `0.0.0` |
 
-Limits are validated against hard ceilings. The registry URL check currently restricts candidates to local HTTP services on port 4000 and rejects credentials, query strings, fragments, remote hosts, and HTTPS URLs. This is a local testnet development boundary, not a general-purpose remote service registry.
+The runner's current example task chooses one cheapest eligible source for a report, so it pays at most once even though the task policy can state a ceiling of up to three paid calls. The persistent spending firewall also enforces the existing daily budget and attempt limit.
 
-## Deterministic planning contract
+## Wallet authorization
 
-1. The registry supplies explicitly approved service metadata; discovery must not accept a model-supplied arbitrary URL.
-2. A service's advertised metadata price is informational only. The executor must inspect that endpoint's actual HTTP 402 challenge and pass its `accepts` array to `parseX402Requirements`.
-3. `selectCheapestEligibleService` filters by trust/allowlist, network, native HBAR asset, receiver allowlist, and actual amount against the task budget, then deterministically sorts by amount and service ID.
-4. The selected amount must be reserved through the spending firewall before the x402 client can sign or pay.
-5. A future executor must enforce call/step/runtime/retry limits, cancellation, response validation, and a settlement receipt for every paid result.
-6. An optional LLM may interpret the goal or suggest ranking, but it cannot fetch, sign, reserve, or authorize a payment.
+Phase 10 requires a distinct, single-use wallet grant. Request a challenge with the Phase 10 scope:
 
-## Current acceptance gap
+```cmd
+curl -X POST http://127.0.0.1:4000/api/authorization/challenge ^
+  -H "content-type: application/json" ^
+  -d "{\"account\":\"YOUR_EVM_WALLET_ADDRESS\",\"chainId\":296,\"scope\":\"heder1:agent-v2:bounded-task\"}"
+```
 
-The existing merchant in `services/api/src/paid-resource.ts` currently advertises a fixed 100,000-tinybar requirement and returns one demo report. The current agent is hard-coded to that resource. Therefore the following Phase 10 completion criteria are **not yet met by this foundation PR**:
+Sign the returned `message` with the wallet's `personal_sign` method and verify it through the existing `POST /api/authorization/verify` endpoint. The response's `authorizationToken` is sent as `x-heder1-authorization`. Never share or log the token or wallet signature. The Phase 10 grant is scoped separately and cannot be consumed by the Phase 9 endpoint.
 
-- Two or more distinct registered test services with independently inspected 402 requirements.
-- A real payment to the deterministically selected cheapest service from a multi-service run.
-- An end-to-end no-eligible-service test through the execution API, proving that no payment is attempted.
-- End-to-end cancellation, timeouts, call accounting, and receipts for the v2 runner.
+The signed message states a 0.005 HBAR total task ceiling, a 0.001 HBAR per-payment ceiling, and the approved registry boundary. The existing API does not receive a private key from the wallet; the configured testnet payer key stays in the local API environment.
 
-Do not describe Phase 10 as complete until these have been implemented and tested locally on Hedera Testnet. Never turn on public Render payment execution to test this flow.
+## Run a bounded task
 
-## Tests
+For local testnet testing only:
+
+1. Start the API locally on port 4000.
+2. Configure a dedicated funded Hedera Testnet payer in `services/api/.env`.
+3. Keep `HEDERA_X402_DEMO_ENABLED=false`.
+4. Set `HEDERA_AGENT_V2_ENABLED=true` and `HEDERA_NETWORK=testnet` only in the local development environment.
+5. Fetch the service registry and status. Obtain and verify a Phase 10 wallet grant as described above.
+6. Generate a UUID in PowerShell (run in a separate terminal):
+
+```powershell
+[guid]::NewGuid().ToString()
+```
+
+Keep that UUID as `RUN_ID`. You must provide it in the run request so a second terminal can cancel the active task before the first request finishes.
+
+Execute the example goal:
+
+```cmd
+curl -X POST http://127.0.0.1:4000/api/agent/v2/run ^
+  -H "content-type: application/json" ^
+  -H "x-heder1-authorization: YOUR_SHORT_LIVED_PHASE_10_TOKEN" ^
+  -d "{\"runId\":\"RUN_ID_FROM_POWERSHELL\",\"goal\":\"Find the cheapest approved source for a short report and return its receipt\",\"budgetTinybars\":500000,\"maxPaidCalls\":3}"
+```
+
+A successful response includes the selected service, actual amount, result, total reserved expenditure, and a HashScan transaction receipt. Verify the transaction independently on HashScan Testnet.
+
+**This run may spend up to 0.001 HBAR in the current one-payment implementation.** Discovery requests are unpaid. Do not run it unless you intend to pay. Never enable `HEDERA_AGENT_V2_ENABLED` or payment execution on public Render/production.
+
+## Cancellation
+
+While the run request is still active in the first terminal, request cancellation from a second terminal using the same client-generated `runId`:
+
+```cmd
+curl -X POST http://127.0.0.1:4000/api/agent/v2/cancel ^
+  -H "content-type: application/json" ^
+  -d "{\"runId\":\"RUN_ID_FROM_POWERSHELL\"}"
+```
+
+Cancellation aborts in-flight HTTP requests and prevents later steps from proceeding. Cancellation cannot reverse a blockchain settlement that has already been submitted; check the final receipt and transaction status. Run IDs and cancellation state are process-local, so restarting the API stops all in-flight runs.
+
+## Safe-stop behavior and audit
+
+- A candidate must be registered, approved, allowlisted, local, on Hedera Testnet, native HBAR, and have a real 402 requirement within the task budget and per-payment cap.
+- No eligible candidate results in HTTP 422 with `paymentAttempted: false`; the API integration test mocks two over-budget 402 quotes and asserts only the two unpaid discovery requests occur.
+- A reservation is written before the payment signer is constructed.
+- The SDK policy filters payment requirements to the selected exact network, asset, receiver, scheme, and amount.
+- A paid response is accepted only if its resource ID, amount, settled status, and non-empty transaction ID match the selected service.
+- Agent start/finish outcomes and payment settlement/rejection events use the existing audit trail.
+- The LLM is not connected to the payment execution path. Planning and selection are deterministic.
+
+## Test and build commands
 
 Run from the repository root:
 
@@ -55,6 +115,12 @@ Run from the repository root:
 pnpm --filter @heder1/api test
 pnpm --filter @heder1/api typecheck
 pnpm --filter @heder1/api build
+pnpm build
+pnpm typecheck
 ```
 
-The `agent-v2.test.ts` tests exercise deterministic selection, actual challenge parsing, budget/receiver/network rejection, URL boundary checks, and hard limits. They do not make network requests or payments.
+The automated suite tests registry policy, per-service prices, firewall reservations, authorization-scope separation, cancellation handling, and a no-eligible-service API run. It does not prove that a live testnet payment succeeded. Phase 10's final acceptance still requires a local run that pays the selected 0.0005 HBAR summary service and a verified HashScan receipt.
+
+## Remaining limitation
+
+This is a testnet prototype with in-memory cancellation and a local JSON spending ledger. The daily ledger is serialized only within one Node process and is not multi-instance safe. The current executor performs one paid call per task, has no LLM integration, and uses two local endpoints rather than a public third-party discovery network. These limits are intentional for a first bounded version; do not describe it as production-ready.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { handlePaidResource } from "./paid-resource.js";
+import { handlePaidResource, handleShortSummaryResource } from "./paid-resource.js";
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
@@ -50,10 +50,10 @@ function supportedResponse() {
   };
 }
 
-function validPaymentHeader(network = "hedera:testnet") {
+function validPaymentHeader(network = "hedera:testnet", amount = "100000") {
   return Buffer.from(JSON.stringify({
     x402Version: 2,
-    accepted: { scheme: "exact", network },
+    accepted: { scheme: "exact", network, amount, payTo: "0.0.11044329", asset: "0.0.0" },
     payload: {},
   })).toString("base64");
 }
@@ -88,6 +88,25 @@ test("requests without payment receive a 402 challenge with fixed testnet terms"
   assert.equal((state.body as any).accepts[0].amount, "100000");
   assert.equal((state.body as any).accepts[0].payTo, "0.0.11044329");
   assert.equal(state.headers["payment-required"] !== undefined, true);
+});
+
+
+test("short-summary service advertises its own lower 402 price", async () => {
+  globalThis.fetch = async () => jsonResponse(supportedResponse());
+  const { reply, state } = makeReply();
+  await handleShortSummaryResource(makeRequest(), reply);
+  assert.equal(state.statusCode, 402);
+  assert.equal((state.body as any).resource.url, "/api/x402/summary");
+  assert.equal((state.body as any).accepts[0].amount, "50000");
+  assert.equal((state.body as any).accepts[0].asset, "0.0.0");
+});
+
+test("short-summary service rejects a payment payload signed for the other service price", async () => {
+  globalThis.fetch = async () => jsonResponse(supportedResponse());
+  const { reply, state } = makeReply();
+  await handleShortSummaryResource(makeRequest(validPaymentHeader("hedera:testnet", "100000")), reply);
+  assert.equal(state.statusCode, 400);
+  assert.match((state.body as any).error, /does not match/);
 });
 
 test("malformed payment proofs are rejected without calling verify or settle", async () => {
