@@ -6,7 +6,7 @@ import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js"
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, verifyAuditTrail } from "./audit-trail.js";
-import { verifyHcsAnchor } from "./hcs-audit.js";
+import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -91,6 +91,16 @@ app.get("/api/audit/status", async (_request, reply) => {
     return { ...verification, ledger: "local-jsonl-hash-chain", independentlyAnchored: false, note: "Local hash-chain validation only. This is not an HCS anchor or proof against deletion by the host." };
   } catch (error) {
     return reply.code(500).send({ valid: false, error: error instanceof Error ? error.message : "Could not verify audit trail." });
+  }
+});
+
+/** Return locally indexed HCS references so callers can independently open Mirror Node evidence. */
+app.get("/api/audit/anchors", async (_request, reply) => {
+  try {
+    const anchors = await listHcsAnchors();
+    return { enabled: process.env.HEDERA_AUDIT_HCS_ENABLED === "true", anchors };
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Could not read HCS anchor index." });
   }
 });
 
