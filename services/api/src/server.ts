@@ -209,7 +209,7 @@ app.post<{ Body: AgentV2TaskInput }>("/api/agent/v2/run", async (request, reply)
     return reply.code(403).send({ error: "Agent v2 is disabled.", hint: "For local testnet testing only, set HEDERA_AGENT_V2_ENABLED=true and HEDERA_NETWORK=testnet. Never enable payment execution on public Render." });
   }
   const token = request.headers["x-heder1-authorization"];
-  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
+  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization first." });
@@ -254,7 +254,7 @@ app.post("/api/agent/run", async (request, reply) => {
     });
   }
   const token = request.headers["x-heder1-authorization"];
-  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
+  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Connect a Hedera Testnet wallet and approve one agent invocation in the dashboard." });
