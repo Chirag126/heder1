@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: heder1-api
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @heder1/api build
+    startCommand: pnpm --filter @heder1/api start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.0
+      - key: NODE_ENV
+        value: production
+      - key: HEDERA_NETWORK
+        value: testnet
+      - key: HEDERA_CORS_ORIGINS
+        value: https://heder1-web.onrender.com
+      - key: HEDERA_AGENT_ENABLED
+        value: "false"
+      - key: HEDERA_X402_DEMO_ENABLED
+        value: "false"
+      - key: HEDERA_AUDIT_HCS_ENABLED
+        value: "false"
+      - key: HEDERA_X402_PAID_RESOURCE_URL
+        value: http://127.0.0.1:4000/api/x402/paid-resource
+
+  - type: web
+    name: heder1-web
+    runtime: static
+    plan: free
+    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @heder1/web build
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://heder1-api.onrender.com
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
