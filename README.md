@@ -147,3 +147,17 @@ These checks validate types and builds; they do not replace automated tests or o
 ## License
 
 To be selected before public release.
+
+
+## Phase 4 — Wallet and authorization UI
+
+The web app includes an EVM-provider wallet connection flow, connected account display, Hedera Testnet chain-ID verification (296 / `0x128`), a network-switch request, and a limited-consent panel describing the one-resource, 0.001 HBAR-per-invocation policy.
+
+### Important security boundary
+
+- The browser never requests, receives, or stores a private key or seed phrase.
+- Wallet connection is used for account display and network verification; this change does not submit transactions.
+- The checkbox is **page-local consent UI only**. It resets on disconnect/network change and is not a server-issued authorization token.
+- This UI consent is not yet wired to authorize `POST /api/agent/run`. The backend agent remains separately disabled by default and uses its configured server-side testnet signer when enabled. Keep `HEDERA_AGENT_ENABLED=false` unless deliberately running the local testnet demo.
+- An EVM-compatible provider is required. Wallet behavior depends on the wallet's support for Hedera Testnet EVM chain ID 296 and `wallet_switchEthereumChain`.
+- Before production use, add a server-verified, short-lived, one-time authorization grant bound to a wallet signature and payment policy; never trust a frontend checkbox as an authorization boundary.
