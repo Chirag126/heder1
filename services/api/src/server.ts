@@ -193,7 +193,7 @@ app.post("/api/agent/run", async (request, reply) => {
   await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { account: authorization.account, scope: authorization.scope } });
   try {
     const result = await runPaymentAgent();
-    await appendAuditEvent({ event: "agent.run_finished", outcome: result.response.ok ? "accepted" : "failed", details: { account: authorization.account, scope: authorization.scope, httpStatus: result.response.status, decision: result.decision } });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: result.settlement.status === "settled" ? "accepted" : "failed", details: { account: authorization.account, scope: authorization.scope, httpStatus: result.response.status, decision: result.decision, settlementStatus: result.settlement.status, transactionId: result.settlement.transactionId, explorerUrl: result.settlement.explorerUrl } });
     return reply.code(result.response.status).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {
     request.log.error({ err: error }, "autonomous x402 payment agent failed");
