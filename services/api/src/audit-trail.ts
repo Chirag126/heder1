@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, appendFile, chmod } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { anchorAuditRecord, type HcsAnchor } from "./hcs-audit.js";
 
 export type AuditEvent =
   | "authorization.challenge_issued"
@@ -38,7 +39,7 @@ function recordHash(record: Omit<AuditRecord, "hash">): string {
   return createHash("sha256").update(JSON.stringify(record)).digest("hex");
 }
 
-export async function appendAuditEvent(input: AuditInput): Promise<AuditRecord> {
+export async function appendAuditEvent(input: AuditInput): Promise<AuditRecord & { hcsAnchor?: HcsAnchor }> {
   let release!: () => void;
   const previous = queue;
   queue = new Promise<void>((resolveQueue) => { release = resolveQueue; });
@@ -76,7 +77,8 @@ export async function appendAuditEvent(input: AuditInput): Promise<AuditRecord> 
     const record: AuditRecord = { ...base, hash: recordHash(base) };
     await appendFile(path, JSON.stringify(record) + "\n", { encoding: "utf8", mode: 0o600, flag: "a" });
     await chmod(path, 0o600);
-    return record;
+    const hcsAnchor = await anchorAuditRecord(record);
+    return hcsAnchor ? { ...record, hcsAnchor } : record;
   } finally {
     release();
   }
