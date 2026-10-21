@@ -1,4 +1,3 @@
-import "dotenv/config";
 import Fastify from "fastify";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, paidResourcePolicy } from "./paid-resource.js";
