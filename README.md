@@ -607,7 +607,7 @@ Evidence links:
 - [Open the reported Phase 10 settlement in HashScan Testnet](https://hashscan.io/testnet/transaction/0.0.7162784%401792621688.152704457)
 - [Look up the transaction in the Hedera Testnet Mirror Node](https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.7162784-1792621688-152704457)
 
-The run response is saved by the operator as `evidence/phase-10/successful-agent-run.json` locally; it should only be committed after checking it contains no secrets, signatures, authorization tokens, or payment proofs.
+If you save the run response locally as `evidence/phase-10/successful-agent-run.json`, inspect it before committing and confirm it contains no secrets, signatures, authorization tokens, or payment proofs.
 
 **Independent verification still required:** open the HashScan link and confirm the transaction succeeded and its transfer details agree with the reported payment. Then use the local API's audit endpoints to locate the `payment.settled` and `agent.run_finished` records for this run and verify the matching HCS anchor against the public Mirror Node. Do not describe the Phase 10 payment or its specific audit record as independently verified until these checks are complete.
 
