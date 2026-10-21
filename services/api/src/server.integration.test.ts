@@ -132,7 +132,7 @@ test("Phase 10 stops through the API without paying when every 402 quote exceeds
       method: "POST",
       url: "/api/agent/v2/run",
       headers: { "x-heder1-authorization": grant.authorizationToken },
-      payload: { goal: "Find the cheapest approved short report", budgetTinybars: 500000, maxPaidCalls: 3 },
+      payload: { runId: "00000000-0000-4000-8000-000000000123", goal: "Find the cheapest approved short report", budgetTinybars: 500000, maxPaidCalls: 3 },
     });
     assert.equal(response.statusCode, 422);
     assert.equal(response.json().status, "stopped-safely");
