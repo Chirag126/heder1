@@ -6,6 +6,7 @@ import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js"
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, verifyAuditTrail } from "./audit-trail.js";
+import { verifyHcsAnchor } from "./hcs-audit.js";
 
 const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -90,6 +91,21 @@ app.get("/api/audit/status", async (_request, reply) => {
     return { ...verification, ledger: "local-jsonl-hash-chain", independentlyAnchored: false, note: "Local hash-chain validation only. This is not an HCS anchor or proof against deletion by the host." };
   } catch (error) {
     return reply.code(500).send({ valid: false, error: error instanceof Error ? error.message : "Could not verify audit trail." });
+  }
+});
+
+/** Verify an audit-record hash against a specific public Hedera Testnet HCS message. */
+app.get<{ Querystring: { topicId?: string; sequenceNumber?: string; auditHash?: string } }>("/api/audit/verify-hcs", async (request, reply) => {
+  const sequenceNumber = Number(request.query.sequenceNumber);
+  try {
+    const result = await verifyHcsAnchor({
+      topicId: request.query.topicId ?? "",
+      sequenceNumber,
+      expectedAuditHash: request.query.auditHash ?? "",
+    });
+    return reply.code(result.valid ? 200 : 404).send(result);
+  } catch (error) {
+    return reply.code(400).send({ valid: false, error: error instanceof Error ? error.message : "HCS verification failed." });
   }
 });
 
