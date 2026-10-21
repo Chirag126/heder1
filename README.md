@@ -202,3 +202,19 @@ To verify a published anchor independently, call:
 The API queries the public Hedera Testnet Mirror Node and compares the decoded message with the expected audit hash. The response includes the Mirror Node URL for independent inspection. The caller must obtain the audit record hash and HCS topic sequence number from the submission response/logs or the public topic messages; do not treat a local API response alone as proof.
 
 Automated tests cover matching and mismatching Mirror Node messages without submitting a real HCS transaction. A live end-to-end anchor has not been run by CI. Before claiming a verified live deployment, configure a testnet topic/operator, submit one harmless test anchor, and independently confirm the message on the public Mirror Node.
+
+## Phase 6 — Live product dashboard
+
+The dashboard now reads current state from the Fastify API rather than relying only on static UI labels.
+
+- Live API and x402 configuration status, including configured payer/receiver account IDs where available.
+- Agent enablement and spending-firewall limits, including the local ledger's single-instance limitation.
+- Wallet connection, Hedera Testnet chain-ID verification, and server-verified one-time wallet authorization for an agent invocation.
+- Sanitized recent audit history via `GET /api/audit/records?limit=30`. The endpoint validates the local hash chain before returning records and omits detail keys that could contain nonces, signatures, tokens, proofs, or credentials.
+- HCS anchor index, public Mirror Node links, HashScan transaction links for recorded transaction references, and an interactive expected-hash verification form.
+- Manual refresh and loading/error/empty states.
+
+Run the dashboard and API together with `pnpm dev`; the dashboard is available at `http://localhost:5173`.
+
+**Safety boundary:** agent execution remains disabled by default. If explicitly enabled for local testnet development, an authorized run may spend up to 0.001 HBAR. The local audit history and firewall ledger are not multi-instance safe. A transaction link is only shown when the backend has recorded a transaction reference; a facilitator response is not a substitute for independent transaction verification.
+
