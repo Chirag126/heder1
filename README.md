@@ -172,3 +172,15 @@ The dashboard now asks the wallet to sign a server-generated, short-lived challe
 - The grant and challenge stores are **in-memory and single-process only**. Restarting the API invalidates outstanding grants, and multi-instance deployment must use a shared, atomic, durable store plus rate limiting.
 - The backend agent remains disabled unless `HEDERA_AGENT_ENABLED=true` in local testnet development and `HEDERA_NETWORK=testnet`. A valid wallet grant does not override this switch.
 - The wallet authorization layer is a local prototype. Do not expose these endpoints publicly or treat them as production-ready until persistence, origin/CSRF controls, rate limiting, and deployment-specific wallet/account mapping have been reviewed.
+
+
+## Phase 5 — Verifiable audit trail (local prototype)
+
+The API now records wallet authorization challenges and grants, authorization rejections, agent-run outcomes, payment attempts, payment rejections, and facilitator-reported settlement references in a local append-only JSONL file. Each record includes a sequence number, timestamp, event/outcome, and SHA-256 hash linked to the previous record. The API exposes `GET /api/audit/status` to validate the chain and return its record count and head hash.
+
+- Default path: `services/api/data/audit-trail.jsonl`; override with `HEDERA_AUDIT_LOG_PATH`. The local data directory is ignored by Git.
+- Settlement records include the payment proof hash, fixed amount, configured receiver, network, transaction reference, and settlement timestamp. Raw payment payloads, signatures, private keys, and seed phrases are not written to the audit trail.
+- A malformed or tampered existing chain fails closed for further audit appends.
+- The file is serialized within one Node.js process. It is **not multi-process/multi-host safe**, and an operator with write access can delete or replace the file. The local hash chain is tamper-evident for edits that are checked against the retained chain, but it is not an independent external anchor.
+- **Hedera Consensus Service (HCS) anchoring is not enabled in this change.** To claim independent evidence, a follow-up should publish audit record hashes to a configured HCS topic using a separately controlled testnet operator, retain HCS sequence/consensus timestamps, and test verification against a Mirror Node. Do not claim HCS logging or independent anchoring until that integration is implemented and verified.
+- Do not deploy this local audit store publicly as a production audit system. A durable transactional store, access controls, retention/export policy, and optional HCS anchoring require separate review.
