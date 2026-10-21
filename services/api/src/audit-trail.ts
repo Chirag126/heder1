@@ -112,3 +112,33 @@ export async function verifyAuditTrail(pathInput?: string): Promise<{ valid: boo
   }
   return { valid: true, records: lines.length, headHash };
 }
+
+
+/** Return a bounded, sanitized view for the dashboard; never expose nonces, signatures, tokens, or proofs. */
+export async function listAuditRecords(limit = 25): Promise<Array<Record<string, unknown>>> {
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const path = auditPath();
+  const integrity = await verifyAuditTrail(path);
+  if (!integrity.valid) throw new Error("Audit trail integrity check failed; refusing to expose records.");
+  let raw: string;
+  try { raw = await readFile(path, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return raw.split("\\n").filter(Boolean).slice(-boundedLimit).reverse().map((line) => {
+    const record = JSON.parse(line) as AuditRecord;
+    const details = Object.fromEntries(Object.entries(record.details ?? {}).filter(([key]) =>
+      !/(nonce|signature|token|private.?key|seed|proof|secret|credential)/i.test(key)
+    ));
+    return {
+      id: record.id,
+      sequence: record.sequence,
+      timestamp: record.timestamp,
+      event: record.event,
+      outcome: record.outcome,
+      hash: record.hash,
+      details,
+    };
+  });
+}
