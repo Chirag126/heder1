@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import {
-  claimTaskRun, closeDatabasePool, consumeGrantRecord, ensureDatabaseReady,
-  saveChallengeRecord, saveGrantRecord, takeChallengeRecord, updateTaskRun,
+  claimPaymentProof, claimTaskRun, closeDatabasePool, consumeGrantRecord, ensureDatabaseReady,
+  finishPaymentProof, saveChallengeRecord, saveGrantRecord, takeChallengeRecord, updateTaskRun,
 } from "./database.js";
 import { reservePostgresSpend, transitionPostgresReservation } from "./postgres-spending-ledger.js";
 
@@ -83,4 +83,25 @@ test("task run IDs and idempotency keys are unique across process restarts", { s
   await updateTaskRun(runId, accountId, "unknown", undefined, "simulated_timeout");
   await closeDatabasePool();
   assert.equal(await claimTaskRun(claim), false);
+});
+
+
+test("payment proof replay is blocked across restart and unknown outcomes are never resubmitted", { skip: !testDatabaseUrl }, async () => {
+  const proofHash = createHash("sha256").update(randomBytes(32)).digest("hex");
+  assert.deepEqual(await claimPaymentProof(proofHash, "/api/x402/summary"), { claimed: true });
+  const duplicate = await claimPaymentProof(proofHash, "/api/x402/summary");
+  assert.equal(duplicate.claimed, false);
+  if (!duplicate.claimed) assert.equal(duplicate.status, "processing");
+  assert.equal(await finishPaymentProof({ proofHash, status: "unknown", errorCode: "simulated_timeout" }), true);
+  await closeDatabasePool();
+  const afterRestart = await claimPaymentProof(proofHash, "/api/x402/summary");
+  assert.equal(afterRestart.claimed, false);
+  if (!afterRestart.claimed) assert.equal(afterRestart.status, "unknown");
+  assert.equal(await finishPaymentProof({ proofHash, status: "settled", transactionId: "0.0.123@1234567890.000000001" }), true);
+  const settled = await claimPaymentProof(proofHash, "/api/x402/summary");
+  assert.equal(settled.claimed, false);
+  if (!settled.claimed) {
+    assert.equal(settled.status, "settled");
+    if (settled.status === "settled") assert.equal(settled.transactionId, "0.0.123@1234567890.000000001");
+  }
 });
