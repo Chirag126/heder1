@@ -21,7 +21,10 @@ export type AuditEvent =
   | "mainnet.readiness_grant_issued"
   | "mainnet.readiness_grant_consumed"
   | "integration.hedera.account_queried"
-  | "integration.hedera.account_query_failed";
+  | "integration.hedera.account_query_failed"
+  | "recurring_payment.draft_created"
+  | "recurring_payment.draft_cancelled"
+  | "agent_tool.readonly_account_context";
 
 export type AuditInput = {
   event: AuditEvent;
