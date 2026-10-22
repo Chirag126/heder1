@@ -5,7 +5,7 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
-import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
 import {
   DEFAULT_AGENT_V2_LIMITS,
   getApprovedServiceRegistry,
