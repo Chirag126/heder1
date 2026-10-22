@@ -127,4 +127,4 @@ pnpm typecheck
 
 ## Explicit remaining work
 
-This is not production-ready. The approval-required mode currently blocks payment safely but does not yet provide a complete approve-and-resume flow. Preview mode is available through policy simulation, not yet a complete frontend planning workflow. The daily ledger is process-local, and ambiguous reservations require manual reconciliation. Mainnet, additional assets/decimals, multi-instance locking, and durable task-level multi-payment accounting remain disabled/out of scope.
+This is not production-ready. The approval-required mode currently blocks payment safely but does not yet provide a complete approve-and-resume flow. Preview mode is available through the dashboard quote simulator; the current preview quote is a fixed sample offer rather than a full multi-service plan. The daily ledger is process-local, and ambiguous reservations require manual reconciliation. Mainnet, additional assets/decimals, multi-instance locking, and durable task-level multi-payment accounting remain disabled/out of scope.
