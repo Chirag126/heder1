@@ -5,6 +5,7 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
 import {
   DEFAULT_AGENT_V2_LIMITS,
   getApprovedServiceRegistry,
@@ -22,6 +23,7 @@ export type AgentV2TaskInput = {
   budgetTinybars?: number;
   maxPaidCalls?: number;
   allowedServiceIds?: string[];
+  policy?: UserSpendingPolicy;
 };
 
 export type AgentV2TaskResult = {
@@ -72,13 +74,17 @@ export async function runAgentV2Task(
   options: { signal: AbortSignal; runId?: string },
 ): Promise<AgentV2TaskResult> {
   if (!isAgentV2Enabled()) throw new Error("Agent v2 is disabled. Enable HEDERA_AGENT_V2_ENABLED=true for local Hedera Testnet development only.");
+  if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
+  const policy = input.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 };
+  if (policy.expiresAt <= Date.now()) throw new Error("Wallet authorization or user policy expired before task execution.");
+  if (policy.mode !== "autonomous") throw new Error(policy.mode === "preview" ? "Preview mode never signs or sends payments." : "Approval-required mode needs an explicit approval flow; no payment was signed or sent.");
   const config = getX402Configuration();
   if (!config) throw new Error("Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env.");
 
   const limits: AgentV2Limits = {
     ...DEFAULT_AGENT_V2_LIMITS,
-    ...(typeof input.budgetTinybars === "number" ? { budgetTinybars: input.budgetTinybars } : {}),
-    ...(typeof input.maxPaidCalls === "number" ? { maxPaidCalls: input.maxPaidCalls } : {}),
+    budgetTinybars: Math.min(policy.taskBudgetTinybars, typeof input.budgetTinybars === "number" ? input.budgetTinybars : policy.taskBudgetTinybars),
+    maxPaidCalls: Math.min(policy.maxPaidCallsPerTask, typeof input.maxPaidCalls === "number" ? input.maxPaidCalls : policy.maxPaidCallsPerTask),
   };
   const plan = summarizeTaskPlan(input.goal, limits);
   if (!plan.accepted) throw new Error(plan.errors.join(" "));
@@ -87,9 +93,8 @@ export async function runAgentV2Task(
 
   const runId = options.runId ?? randomUUID();
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(limits.maxRuntimeMs)]);
-  const registry = getApprovedServiceRegistry().filter((service) =>
-    !input.allowedServiceIds || input.allowedServiceIds.includes(service.id)
-  );
+  const requestedServices = input.allowedServiceIds ? input.allowedServiceIds.filter((id) => policy.allowedServiceIds.includes(id)) : policy.allowedServiceIds;
+  const registry = getApprovedServiceRegistry().filter((service) => requestedServices.includes(service.id));
   if (!registry.length) throw new Error("No registered service is inside the user's service allowlist.");
 
   const requirementsByService = new Map<string, ReturnType<typeof parseX402Requirements>>();
@@ -131,13 +136,18 @@ export async function runAgentV2Task(
   // The task budget is reserved logically for the whole run; the persistent
   // firewall reservation below is written before the signer is constructed.
   const selected = decision.selected;
+  const simulation = simulateSpendingPolicy(policy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
+  if (!simulation.allowed) throw new Error(simulation.reason);
+  if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
   const reservation = await reserveAgentV2Spend({
     amountTinybars: String(selected.amountTinybars),
     receiverAccountId: selected.requirement.payTo,
     resourceUrl: selected.service.url,
-  });
+  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay });
   if (!reservation.allowed) throw new Error(reservation.reason);
   if (signal.aborted) throw new Error("Agent v2 task was cancelled before payment execution.");
+
+  if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) throw new Error("Task cancelled, authorization expired, or emergency kill switch enabled before signing. Reservation is retained conservatively.");
 
   const signer = createClientHederaSigner(
     config.accountId,
@@ -158,6 +168,7 @@ export async function runAgentV2Task(
   const paidFetch = wrapFetchWithPayment(fetch, client);
   let response: Response;
   try {
+    if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) throw new Error("Task cancelled, authorization expired, or emergency kill switch enabled before payment delivery. Reservation is retained conservatively.");
     response = await paidFetch(selected.service.url, {
       method: "GET",
       redirect: "error",
