@@ -38,6 +38,8 @@ export default function App() {
   const [maxPaidCallsPerDay, setMaxPaidCallsPerDay] = useState("5");
   const [approvalThresholdTinybars, setApprovalThresholdTinybars] = useState("50000");
   const [policySimulation, setPolicySimulation] = useState<{ allowed: boolean; requiresApproval?: boolean; reason: string } | null>(null);
+  const [activeRunId, setActiveRunId] = useState("");
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [visibleAnchorCount, setVisibleAnchorCount] = useState(7);
   const [visibleRecordCount, setVisibleRecordCount] = useState(10);
 
@@ -130,12 +132,24 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : "Grant revocation failed."); }
     finally { setBusy(""); }
   }
+  async function cancelActiveRun() {
+    if (!activeRunId) return;
+    setCancelBusy(true);
+    try {
+      const response = await fetch(apiUrl("/api/agent/v2/cancel"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runId: activeRunId }) });
+      const result = await response.json() as { cancelled?: boolean; note?: string; error?: string };
+      if (!response.ok || !result.cancelled) throw new Error(result.error ?? "Task is no longer active.");
+      setNotice(result.note ?? "Cancellation requested. Check the final receipt before retrying.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Task cancellation failed."); }
+    finally { setCancelBusy(false); }
+  }
   async function runAgent() {
     setBusy("agent"); setError(""); setNotice("");
     try {
       if (!token) throw new Error("Sign and authorize one invocation first.");
       const policy = buildUserPolicy();
       const runId = crypto.randomUUID();
+      setActiveRunId(runId);
       const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers: { "content-type": "application/json", "x-heder1-authorization": token }, body: JSON.stringify({ runId, goal: "Find the cheapest approved source for a short report and return its receipt", budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
       const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ transactionId?: string; explorerUrl?: string }>; note?: string };
       setToken(""); setConsent(false);
@@ -143,7 +157,7 @@ export default function App() {
       setNotice(`Agent ${result.status ?? "completed"}: ${result.selection?.serviceId ?? "approved service"} at ${result.selection?.amountHbar ?? "quoted price"} HBAR. Review the audit history and transaction receipt.`);
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); await refresh(); }
-    finally { setBusy(""); }
+    finally { setBusy(""); setActiveRunId(""); }
   }
   async function verifyAnchor() {
     setBusy("verify"); setError(""); setVerification(null);
@@ -196,7 +210,7 @@ export default function App() {
           {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{policySimulation.allowed ? "Policy permits quote" : policySimulation.requiresApproval ? "Approval required" : "Quote blocked"}</strong><span>{policySimulation.reason}</span></div>}
         </div>
         <label className="consent-row"><input type="checkbox" checked={consent} disabled={!wallet || !isTestnet || Boolean(token) || agentMode !== "autonomous" || Boolean(busy)} onChange={e => setConsent(e.target.checked)}/><span>Approve one task under the policy shown above. Your wallet signature binds these limits and expires within two minutes.</span></label>
-        <div className="action-row"><button className="button secondary" onClick={() => void authorize()} disabled={!wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy)}>{busy === "authorize" ? "Waiting for signature…" : token ? "Authorization ready" : "Sign authorization"}</button><button className="button primary" onClick={() => void runAgent()} disabled={!token || agentMode !== "autonomous" || Boolean(busy) || Boolean(data.agentV2?.killSwitchEnabled)}>{busy === "agent" ? "Running…" : "Run agent"}</button>{token && <button className="button secondary" onClick={() => void revokeGrant()} disabled={Boolean(busy)}>{busy === "revoke" ? "Revoking…" : "Revoke grant"}</button>}</div>
+        <div className="action-row"><button className="button secondary" onClick={() => void authorize()} disabled={!wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy)}>{busy === "authorize" ? "Waiting for signature…" : token ? "Authorization ready" : "Sign authorization"}</button><button className="button primary" onClick={() => void runAgent()} disabled={!token || agentMode !== "autonomous" || Boolean(busy) || Boolean(data.agentV2?.killSwitchEnabled)}>{busy === "agent" ? "Running…" : "Run agent"}</button>{token && <button className="button secondary" onClick={() => void revokeGrant()} disabled={Boolean(busy)}>{busy === "revoke" ? "Revoking…" : "Revoke grant"}</button>}{busy === "agent" && activeRunId && <button className="button secondary" onClick={() => void cancelActiveRun()} disabled={cancelBusy}>{cancelBusy ? "Cancelling…" : "Cancel task"}</button>}</div>
         <p className="panel-footnote">Agent execution can spend testnet HBAR. If disabled by the server, the request is rejected; the frontend cannot override that policy.</p>
       </section>
     </div>
