@@ -58,6 +58,75 @@ function amountHbar(tinybars: number): string {
   return (tinybars / 100_000_000).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+export type AgentV2PreviewInput = { goal: string; policy?: UserSpendingPolicy; budgetTinybars?: number };
+
+export async function previewAgentV2Plan(input: AgentV2PreviewInput) {
+  const policy = input.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, mode: "preview" as const, expiresAt: Date.now() + 120_000 };
+  const policyErrors = validateUserSpendingPolicy(policy);
+  if (policyErrors.length) throw new Error(policyErrors.join(" "));
+  if (!input.goal.trim() || input.goal.length > 2_000) throw new Error("Goal is required and must be at most 2000 characters.");
+  if (policy.expiresAt <= Date.now()) throw new Error("Policy expired; request a fresh wallet-signed policy.");
+  const budget = Math.min(policy.taskBudgetTinybars, input.budgetTinybars ?? policy.taskBudgetTinybars);
+  if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("Preview budget must be a positive safe integer.");
+  const registry = getApprovedServiceRegistry().filter(service => service.allowed && service.trust === "approved" && policy.allowedServiceIds.includes(service.id));
+  const requirementsByService = new Map<string, ReturnType<typeof parseX402Requirements>>();
+  const checks: Array<{ serviceId: string; status: "quoted" | "no-quote" | "rejected"; amountTinybars?: number; reason: string }> = [];
+  let httpCalls = 0;
+  for (const service of registry) {
+    if (!isSafeRegisteredUrl(service.url)) {
+      checks.push({ serviceId: service.id, status: "rejected", reason: "Registered URL failed the local endpoint safety check." });
+      requirementsByService.set(service.id, []);
+      continue;
+    }
+    try {
+      const response = await fetch(service.url, { method: "GET", redirect: "error", signal: AbortSignal.timeout(8_000), headers: { accept: "application/json" } });
+      httpCalls += 1;
+      if (response.status !== 402) {
+        requirementsByService.set(service.id, []);
+        checks.push({ serviceId: service.id, status: "no-quote", reason: `Service returned HTTP ${response.status}, not a payment quote.` });
+        continue;
+      }
+      const body: unknown = await response.json().catch(() => null);
+      const requirements = parseX402Requirements(parseChallenge(response, body));
+      requirementsByService.set(service.id, requirements);
+      const valid = requirements.filter(r => r.scheme === "exact" && r.network === policy.network && policy.allowedAssets.includes(r.asset) && r.asset === "0.0.0" && Number.isSafeInteger(Number(r.amount)) && Number(r.amount) > 0 && Number(r.amount) <= policy.maxPaymentTinybars && Number(r.amount) <= budget);
+      const cheapest = valid.sort((a,b) => Number(a.amount)-Number(b.amount))[0];
+      checks.push(cheapest
+        ? { serviceId: service.id, status: "quoted", amountTinybars: Number(cheapest.amount), reason: "Quote fits the per-payment, asset, network, and budget limits; approval is still required before payment." }
+        : { serviceId: service.id, status: "rejected", reason: "No quote fits the signed network, asset, per-payment cap, and task budget." });
+    } catch (error) {
+      requirementsByService.set(service.id, []);
+      checks.push({ serviceId: service.id, status: "rejected", reason: error instanceof Error ? error.message : "Quote discovery failed." });
+    }
+  }
+  const configReceiver = process.env.HEDERA_RECEIVER_ACCOUNT_ID;
+  const decision = selectCheapestEligibleService({
+    services: registry, requirementsByService, budgetTinybars: budget,
+    allowedServiceIds: policy.allowedServiceIds,
+    allowedReceiverIds: configReceiver ? [configReceiver] : [],
+    network: policy.network,
+  });
+  return {
+    mode: "preview" as const,
+    paymentAttempted: false as const,
+    goal: input.goal.trim(),
+    network: policy.network,
+    budgetTinybars: budget,
+    discoveryHttpCalls: httpCalls,
+    candidates: checks,
+    selected: decision.selected ? {
+      serviceId: decision.selected.service.id,
+      description: decision.selected.service.description,
+      amountTinybars: decision.selected.amountTinybars,
+      amountHbar: amountHbar(decision.selected.amountTinybars),
+      asset: decision.selected.requirement.asset,
+      receiverAccountId: decision.selected.requirement.payTo,
+    } : null,
+    rejectionReasons: decision.rejected,
+    note: "Preview performs only HTTP quote discovery. It never reserves funds, constructs a signer, or sends payment.",
+  };
+}
+
 export function isAgentV2Enabled(): boolean {
   return process.env.HEDERA_AGENT_V2_ENABLED === "true" &&
     process.env.NODE_ENV !== "production" &&
