@@ -14,9 +14,10 @@ type PlanPreview = {
   error?: string;
 };
 type MarketplaceNegotiation = {
-  negotiationId: string; decision: string;
+  negotiationId: string; decision: string; rounds: number;
   selected?: { agentId: string; agentName: string; serviceId: string; amountTinybars: number | null; amountHbar: string | null; reason: string } | null;
-  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string }>;
+  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string; negotiation: { response: string; reason: string; counterOfferTinybars: number | null } }>;
+  negotiationLog: Array<{ round: number; agentId: string; agentName: string; action: string; amountTinybars: number | null; reason: string }>;
   paymentAttempted: boolean; nextStep: string; error?: string;
 };
 type DashboardData = {
@@ -357,6 +358,7 @@ export default function App() {
 
     {page === "playground" && <>
       <section className="panel playground-panel">
+        <div className="page-purpose-banner playground-purpose"><span className="purpose-icon">▶</span><div><strong>Agent Playground · Execute a task</strong><p>Use this workspace when you already know what you want to do. Preview service quotes, choose authorization rules, and run a bounded Testnet task. To discover and compare providers before deciding who to hire, start in Agent Marketplace.</p><div className="purpose-actions"><button className="button secondary small" onClick={() => navigate("marketplace")}>Find a provider first →</button><button className="button secondary small" onClick={() => navigate("permissions")}>Review safety limits →</button></div></div></div>
         <div className="panel-head"><div><p className="dash-kicker">01 / TASK INPUT</p><h2>What should the agent do?</h2></div><span className="chip">MAX 2,000 CHARACTERS</span></div>
         <label className="form-label" htmlFor="task-goal">Task description</label>
         <textarea id="task-goal" className="task-textarea" maxLength={2000} value={taskGoal} onChange={event => { setTaskGoal(event.target.value); setPlanDetails(null); setPolicySimulation(null); }} placeholder="Describe the task you want the agent to perform…" />
@@ -400,8 +402,9 @@ export default function App() {
 
     {page === "marketplace" && <>
       <section className="panel wide-panel">
+        <div className="page-purpose-banner marketplace-purpose"><span className="purpose-icon">⇄</span><div><strong>Agent Marketplace · Discover and hire</strong><p>Use this workspace when you need to decide which provider should handle a task. The buyer requests offers, compares capabilities and live prices, and recommends a provider. It does not execute work or move money. When you choose an offer, continue to Agent Playground to review the task and authorize execution.</p><div className="purpose-actions"><button className="button secondary small" onClick={() => navigate("playground")}>Go to direct task execution →</button><button className="button secondary small" onClick={() => navigate("audit")}>View audit evidence →</button></div></div></div>
         <div className="panel-head"><div><p className="dash-kicker">01 / BUYER AGENT</p><h2>Describe the job to hire</h2></div><span className="chip">NO PAYMENT DURING NEGOTIATION</span></div>
-        <p className="panel-copy">Heder1's buyer agent discovers live HTTP 402 prices from the local provider agents. A detailed/full-report request prefers the research provider when it fits your budget; a generic request selects the lowest-priced eligible offer.</p>
+        <p className="panel-copy">A buyer agent asks each registered local provider to respond using its current x402 quote. The buyer can accept only an offer that matches task intent and remains inside your declared budget and Heder1's hard payment ceiling. Current providers are local demos, not independent third-party agents; their identity is not cryptographically verified.</p>
         <label className="form-label" htmlFor="marketplace-goal">Task requested</label>
         <textarea id="marketplace-goal" className="task-textarea" maxLength={2000} value={marketplaceGoal} onChange={event => setMarketplaceGoal(event.target.value)} placeholder="Describe the task a provider agent should complete…" />
         <label className="form-label" htmlFor="marketplace-budget">Maximum task budget (tinybars)</label>
@@ -416,10 +419,12 @@ export default function App() {
               <span>{offer.agentName}</span><strong>{offer.amountHbar ? offer.amountHbar + " HBAR" : "No eligible quote"}</strong>
               <small>{offer.serviceId} · {offer.status}</small><p>{offer.description}</p><p>{offer.reason}</p>
               <small>Capabilities: {offer.capabilities.join(", ")}</small><small>Identity: {offer.identityStatus}</small>
+              <div className="offer-response"><span className={offer.negotiation.response === "accepted" ? "outcome" : offer.negotiation.response === "rejected" ? "outcome bad" : "outcome"}>{offer.negotiation.response === "accepted" ? "Provider accepts" : offer.negotiation.response === "rejected" ? "Provider rejects" : "Provider counteroffer"}</span><small>{offer.negotiation.reason}</small>{offer.negotiation.counterOfferTinybars !== null && <small>Counter-offer: {offer.negotiation.counterOfferTinybars.toLocaleString()} tinybars (advisory only; live x402 quote remains final).</small>}</div>
             </article>)}
           </div>
-          {marketplaceResult.selected && <div className="safety-callout"><strong>Selected: {marketplaceResult.selected.agentName}</strong><p>{marketplaceResult.selected.reason} This selection is not payment authorization.</p><div className="button-row"><button className="button primary" onClick={() => navigate("playground")}>Review and hire in Agent Playground →</button><span className="panel-footnote">The selected provider is preselected in Spending & Permissions. You must still authorize the task.</span></div></div>}
-          <p className="panel-footnote">Negotiation ID: <code>{marketplaceResult.negotiationId}</code>. Payment attempted: {marketplaceResult.paymentAttempted ? "yes" : "no"}. Provider IDs are local and unverified; this is not full A2A/ACP conformance.</p>
+          {marketplaceResult.negotiationLog.length > 0 && <div className="negotiation-log"><div className="panel-head"><div><p className="dash-kicker">NEGOTIATION TRANSCRIPT</p><h3>Buyer and provider responses</h3></div><span className="chip">{marketplaceResult.rounds} ROUND(S)</span></div>{marketplaceResult.negotiationLog.map((entry, index) => <div className="negotiation-log-row" key={entry.round + "-" + entry.agentId + "-" + index}><span>R{entry.round}</span><strong>{entry.agentName}</strong><span>{entry.action}</span><code>{entry.amountTinybars === null ? "—" : entry.amountTinybars.toLocaleString() + " tinybars"}</code><small>{entry.reason}</small></div>)}</div>}
+          {marketplaceResult.selected && <div className="safety-callout"><strong>Selected: {marketplaceResult.selected.agentName}</strong><p>{marketplaceResult.selected.reason} This selection is not payment authorization.</p><div className="button-row"><button className="button primary" onClick={() => navigate("playground")}>Continue to task authorization →</button><span className="panel-footnote">Your task and single-service allowlist are carried forward. You must still review limits, connect your wallet, and authorize execution in the Playground.</span></div></div>}
+          <p className="panel-footnote">Negotiation ID: <code>{marketplaceResult.negotiationId}</code>. Payment attempted: {marketplaceResult.paymentAttempted ? "yes" : "no"}. Current IDs are local and unverified; this deterministic workflow is not full A2A/ACP conformance.</p>
         </section>
       </>}
       <footer className="dash-footer"><span>Provider quotes are discovered from the live x402 HTTP 402 response.</span><span>No quote selection can bypass wallet authorization, spending policy, or the server kill switch.</span></footer>
