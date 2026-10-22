@@ -13,7 +13,12 @@ export type AuditEvent =
   | "agent.run_finished"
   | "payment.attempted"
   | "payment.rejected"
-  | "payment.settled";
+  | "payment.settled"
+  | "mainnet.readiness_checked"
+  | "mainnet.readiness_challenge_rejected"
+  | "mainnet.readiness_challenge_issued"
+  | "mainnet.readiness_grant_issued"
+  | "mainnet.readiness_grant_consumed";
 
 export type AuditInput = {
   event: AuditEvent;
