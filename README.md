@@ -28,7 +28,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 9: settlement receipt validation](#phase-9-settlement-receipt-validation)
 - [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
 - [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
-- [Phase 11: user-defined spending policy](docs/PHASE-11.md)
+- [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -45,7 +45,10 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
 - **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
-- **Phase 11 policy foundation:** wallet-signed user spending limits, quote simulation with clear rejection reasons, approved service and asset allowlists, short expiry, unused-grant revocation, and a server-side emergency kill switch. See [Phase 11 documentation](docs/PHASE-11.md) for supported behavior and remaining limitations.
+- **User spending policy:** wallet-signed limits, per-payment/task/daily budgets, allowlists, short expiry, grant revocation, and a server-side kill switch.
+- **No-payment quote planning:** inspect registered services' actual HTTP 402 quotes and return candidate prices, selected service, and rejection reasons without signing or reserving funds.
+- **Durable reservation ledger:** reservation IDs/status, atomic file replacement, exclusive local-filesystem locking, task-level budget/call accounting, conservative migration of older ledger balances, and operator-controlled settlement reconciliation. Ambiguous outcomes remain reserved.
+- **Operator reconciliation API:** protected by a server-only `HEDERA_RECONCILIATION_TOKEN`; records operator-confirmed settlement outcomes after independent HashScan/Mirror Node checks. It does not independently prove settlement.
 
 ## Architecture
 
@@ -542,6 +545,19 @@ pnpm --filter @heder1/api test
 pnpm typecheck
 pnpm build
 ```
+
+## User spending policy and reservation operations
+
+The policy and reservation work extends the existing spending firewall and approved-service runner. It adds:
+
+- `POST /api/agent/v2/plan` for multi-service quote discovery and cost comparison. It never signs or sends payments.
+- `GET /api/agent/v2/reservations` and `POST /api/agent/v2/reservations/reconcile` for operator-only reservation review and reconciliation. Configure `HEDERA_RECONCILIATION_TOKEN` server-side to enable these routes; never put it in frontend configuration.
+- A durable version-2 reservation ledger with task IDs, budget/call accounting, migration of version-1 balances, atomic replacement, and an exclusive lock on the shared local filesystem.
+- Conservative reconciliation: only a confirmed failure releases the reservation; ambiguous outcomes remain reserved; settled records require a transaction ID.
+
+Read [the spending policy operations guide](docs/SPENDING-POLICY.md) for API examples, migration notes, operational safeguards, and limitations.
+
+**Still not complete:** the wallet-signed approve-and-resume flow is not implemented, and the executor intentionally makes at most one paid call per task. Task accounting is prepared to enforce a multi-call budget, but multi-service payment execution is not enabled. The local JSON ledger is not a distributed database; do not use it across separate hosts or ephemeral instances. Mainnet and additional assets remain disabled.
 
 ## Limitations and future work
 
