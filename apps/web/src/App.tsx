@@ -333,11 +333,33 @@ export default function App() {
         <label className="form-label" htmlFor="task-goal">Task description</label>
         <textarea id="task-goal" className="task-textarea" maxLength={2000} value={taskGoal} onChange={event => { setTaskGoal(event.target.value); setPlanDetails(null); setPolicySimulation(null); }} placeholder="Describe the task you want the agent to perform…" />
         <div className="field-meta"><span>Use a specific, bounded request.</span><span>{taskGoal.length}/2000</span></div>
-        <div className="playground-controls"><div><strong>Spending mode</strong><small>{agentMode === "preview" ? "Preview only — never signs or pays" : agentMode === "approval-required" ? "Wallet approval required for the exact quote" : "Bounded execution with a one-time policy grant"}</small></div><button className="button secondary" onClick={() => navigate("permissions")}>Review limits & permissions →</button></div>
-        <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => { if (agentMode !== "preview") setAgentMode("preview"); void simulatePolicy(true); }}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
-          <button className="button secondary" disabled={sessionPaused || Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled)} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : "Authorize & run task"}</button>
+        <div className="playground-controls"><div><strong>Execution mode</strong><small>{agentMode === "preview" ? "Preview only — choose an execution mode below to run a task" : agentMode === "approval-required" ? "Wallet approval required for the exact quote" : "Bounded execution with a one-time policy grant"}</small></div><button className="button secondary" onClick={() => navigate("permissions")}>Review limits & permissions →</button></div>
+        <div className="user-policy-box">
+          <label>How should the agent be authorized?
+            <select value={agentMode} onChange={event => { setAgentMode(event.target.value as "preview" | "autonomous" | "approval-required"); setToken(""); setPolicySimulation(null); setPlanDetails(null); }}>
+              <option value="preview">Preview only — no payment</option>
+              <option value="autonomous">Bounded execution — sign one-time policy</option>
+              <option value="approval-required">Approve each exact quote in wallet</option>
+            </select>
+          </label>
+          <div className="connected-wallet">
+            <span className="mini-avatar">W</span>
+            <div><strong>{wallet ? shorten(wallet) : "Wallet not connected"}</strong><small>{wallet ? isTestnet ? "Hedera Testnet verified" : "Wrong network — switch before running" : "Connect a compatible EVM wallet to authorize tasks"}</small></div>
+            {!wallet ? <button className="button primary small" disabled={Boolean(busy)} onClick={() => void connectWallet()}>Connect wallet</button> : !isTestnet ? <button className="button secondary small" disabled={Boolean(busy)} onClick={() => void switchNetwork()}>Switch network</button> : <span className="status-pill">TESTNET</span>}
+          </div>
+          <label className="consent-row"><input type="checkbox" checked={consent} disabled={!wallet || !isTestnet || Boolean(busy) || sessionPaused} onChange={event => setConsent(event.target.checked)} /><span>I consent to one bounded testnet task under the configured spending limits and approved-service allowlist.</span></label>
+          {agentMode === "autonomous" && <div className="action-row">
+            <button className="button secondary" disabled={sessionPaused || !wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy)} onClick={() => void authorize()}>{busy === "authorize" ? "Waiting for wallet signature…" : token ? "One-time authorization ready" : "Sign one-time authorization"}</button>
+            {token && <button className="button secondary" disabled={Boolean(busy)} onClick={() => void revokeGrant()}>Revoke authorization</button>}
+          </div>}
+          {agentMode === "approval-required" && <p className="panel-footnote">You will review and sign the exact selected quote in your wallet when you run the task. A separate reusable grant is not required.</p>}
+          {agentMode === "preview" && <p className="panel-footnote">Preview mode never pays. Choose one of the execution modes above to enable task execution.</p>}
         </div>
-        {agentMode === "preview" && <p className="panel-footnote">Preview mode is the default. It performs quote discovery only: no funds are reserved and no payment is attempted.</p>}
+        <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => void simulatePolicy(true)}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
+          <button className="button secondary" disabled={sessionPaused || Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled) || data.agentV2?.paymentExecutionEnabled === false} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : agentMode === "approval-required" ? "Review quote & run task" : "Run authorized task"}</button>
+        </div>
+        {agentMode !== "preview" && !token && agentMode === "autonomous" && <p className="panel-footnote">Sign the one-time authorization above before running. Your wallet signs a message, not a payment transaction.</p>}
+        {data.agentV2?.paymentExecutionEnabled === false && <div className="safety-callout warning-callout"><strong>Payment execution is disabled by the API</strong><p>The server currently does not permit payment execution. The Playground cannot override this setting.</p></div>}
       </section>
       <section className="panel wide-panel"><div className="panel-head"><div><p className="dash-kicker">02 / PLAN PREVIEW</p><h2>Service comparison</h2></div><span className="chip">{planDetails?.paymentAttempted === false ? "NO PAYMENT ATTEMPTED" : "LIVE QUOTES"}</span></div>
         {planDetails?.selected ? <div className="selected-quote"><div><span className="quote-label">LOWEST ELIGIBLE QUOTE</span><h3>{planDetails.selected.serviceId}</h3><p>{planDetails.selected.description ?? "Approved registered service"}</p></div><div className="quote-amount"><strong>{planDetails.selected.amountHbar} HBAR</strong><small>{planDetails.selected.amountTinybars.toLocaleString()} tinybars</small></div></div> : <div className="empty-state"><strong>{planDetails ? "No eligible quote found" : "Preview before authorizing"}</strong><p>{planDetails ? "The API did not find a quote that fits your network, asset, service allowlist and spending caps. Review the rejection reasons below." : "Run a preview to discover current HTTP 402 quotes from approved services and see why each one is eligible or rejected."}</p></div>}
