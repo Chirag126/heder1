@@ -101,9 +101,9 @@ export async function withDatabaseTransaction<T>(work: (client: PoolClient) => P
 
 export async function ensureUser(walletAddress: string): Promise<string> {
   const normalized = walletAddress.toLowerCase();
-  await ensureDatabaseReady();
+  const ready = await ensureDatabaseReady();
   const db = getDatabasePool();
-  if (!db) throw new Error("PostgreSQL is required to persist user state.");
+  if (!ready || !db) return normalized;
   await db.query(
     "INSERT INTO users(wallet_address) VALUES ($1) ON CONFLICT(wallet_address) DO UPDATE SET updated_at = now()",
     [normalized],
@@ -120,10 +120,95 @@ export async function savePolicyVersion(walletAddress: string, policy: unknown):
   const serialized = JSON.stringify(policy);
   const policyHash = createHash("sha256").update(serialized).digest("hex");
   const db = getDatabasePool();
-  if (!db) throw new Error("PostgreSQL is required to persist policy versions.");
+  if (!db) return;
   await db.query(
     "INSERT INTO policy_versions(wallet_address, policy_hash, policy) VALUES ($1,$2,$3::jsonb) ON CONFLICT(wallet_address, policy_hash) DO NOTHING",
     [normalized, policyHash, serialized],
+  );
+}
+
+
+export type AuthStateKind = "authorization" | "payment-approval";
+
+export async function saveChallengeRecord(kind: AuthStateKind, nonce: string, walletAddress: string, payload: unknown, expiresAt: number): Promise<void> {
+  const wallet = await ensureUser(walletAddress);
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is required to persist authorization challenges.");
+  await db.query(
+    "INSERT INTO auth_challenges(kind,nonce,wallet_address,payload,expires_at) VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT(kind,nonce) DO NOTHING",
+    [kind, nonce, wallet, JSON.stringify(payload), new Date(expiresAt)],
+  );
+}
+
+export async function takeChallengeRecord<T>(kind: AuthStateKind, nonce: string): Promise<T | undefined> {
+  return withDatabaseTransaction(async client => {
+    const result = await client.query(
+      "DELETE FROM auth_challenges WHERE kind=$1 AND nonce=$2 AND expires_at > now() RETURNING payload",
+      [kind, nonce],
+    );
+    return result.rowCount ? result.rows[0].payload as T : undefined;
+  });
+}
+
+export async function saveGrantRecord(kind: AuthStateKind, token: string, walletAddress: string, payload: unknown, expiresAt: number): Promise<void> {
+  const wallet = await ensureUser(walletAddress);
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is required to persist authorization grants.");
+  await db.query(
+    "INSERT INTO auth_grants(kind,token_hash,wallet_address,payload,expires_at) VALUES($1,$2,$3,$4::jsonb,$5)",
+    [kind, hashOpaqueToken(token), wallet, JSON.stringify(payload), new Date(expiresAt)],
+  );
+}
+
+export async function consumeGrantRecord<T extends { scope?: string }>(kind: AuthStateKind, token: string, expectedScope?: string): Promise<T | undefined> {
+  return withDatabaseTransaction(async client => {
+    const tokenHash = hashOpaqueToken(token);
+    const result = await client.query(
+      "SELECT payload,expires_at FROM auth_grants WHERE kind=$1 AND token_hash=$2 FOR UPDATE",
+      [kind, tokenHash],
+    );
+    if (!result.rowCount) return undefined;
+    const row = result.rows[0];
+    if (new Date(String(row.expires_at)).getTime() <= Date.now()) {
+      await client.query("DELETE FROM auth_grants WHERE kind=$1 AND token_hash=$2", [kind, tokenHash]);
+      return undefined;
+    }
+    const payload = row.payload as T;
+    // A scope mismatch does not consume a valid grant; the caller still cannot use it on this endpoint.
+    if (expectedScope && payload.scope !== expectedScope) return undefined;
+    await client.query("DELETE FROM auth_grants WHERE kind=$1 AND token_hash=$2", [kind, tokenHash]);
+    return payload;
+  });
+}
+
+export async function revokeGrantRecord(kind: AuthStateKind, token: string): Promise<boolean> {
+  await ensureDatabaseReady();
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is required to persist authorization grants.");
+  const result = await db.query("DELETE FROM auth_grants WHERE kind=$1 AND token_hash=$2 RETURNING token_hash", [kind, hashOpaqueToken(token)]);
+  return Boolean(result.rowCount);
+}
+
+export async function claimTaskRun(input: { runId: string; walletAddress: string; idempotencyKey: string; requestHash: string }): Promise<boolean> {
+  const wallet = await ensureUser(input.walletAddress);
+  const db = getDatabasePool();
+  if (!db) return true;
+  const result = await db.query(
+    `INSERT INTO task_runs(run_id, wallet_address, idempotency_key, request_hash, status)
+     VALUES ($1,$2,$3,$4,'quoted')
+     ON CONFLICT DO NOTHING RETURNING run_id`,
+    [input.runId, wallet, input.idempotencyKey, input.requestHash],
+  );
+  return Boolean(result.rowCount);
+}
+
+export async function updateTaskRun(runId: string, walletAddress: string, status: "quoted"|"reserved"|"submitted"|"settled"|"rejected"|"failed"|"unknown", response?: unknown, errorCode?: string): Promise<void> {
+  const wallet = await ensureUser(walletAddress);
+  const db = getDatabasePool();
+  if (!db) return;
+  await db.query(
+    "UPDATE task_runs SET status=$3, response=$4::jsonb, error_code=$5, updated_at=now() WHERE run_id=$1 AND wallet_address=$2",
+    [runId, wallet, status, response === undefined ? null : JSON.stringify(response), errorCode ?? null],
   );
 }
 
