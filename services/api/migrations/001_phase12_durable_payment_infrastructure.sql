@@ -110,3 +110,19 @@ CREATE TABLE IF NOT EXISTS legacy_spending_holds (
   PRIMARY KEY (source_path, day)
 );
 CREATE INDEX IF NOT EXISTS legacy_spending_holds_day_idx ON legacy_spending_holds(day);
+
+
+CREATE TABLE IF NOT EXISTS payment_proofs (
+  proof_hash TEXT PRIMARY KEY,
+  service_path TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('processing','settled','rejected','unknown')),
+  transaction_id TEXT,
+  settled_at TIMESTAMPTZ,
+  response JSONB,
+  error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status <> 'settled' OR transaction_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS payment_proofs_recovery_idx ON payment_proofs(status, updated_at)
+  WHERE status IN ('processing','unknown');
