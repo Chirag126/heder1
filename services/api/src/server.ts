@@ -257,7 +257,7 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   agentV2Runs.set(runId, controller);
   try {
     await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
-    const result = await runAgentV2Task(input, { signal: controller.signal, runId });
+    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId });
     await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "10", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
     return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {
