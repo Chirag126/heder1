@@ -32,6 +32,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 14: product UI and normal-user experience](docs/PHASE-14.md)\n- [Phase 15: optional Hedera integrations and read-only network tool](docs/PHASE-15.md)
 - [Phase 16: cost, pricing and sustainable service operation](docs/PHASE-16.md)
 - [Phase 17: production hardening and deployment reliability](docs/PHASE-17.md)
+- [Phase 18: agent marketplace negotiation](docs/PHASE-18-MARKETPLACE.md)
 - [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
@@ -39,6 +40,8 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [License](#license)
 
 ## Features
+
+- **Phase 18 agent marketplace negotiation:** a buyer-agent descriptor, two local provider-agent cards, live x402 quote discovery, task-intent-aware offer selection, and a separate safe hiring step through the existing wallet-authorized runner. This is a deterministic local marketplace slice, not full A2A/ACP conformance; see [docs/PHASE-18-MARKETPLACE.md](docs/PHASE-18-MARKETPLACE.md).
 
 - **x402 payments:** handle HTTP 402 payment challenges and retry paid-resource requests.
 - **Autonomous agent:** execute a bounded payment task against an allowlisted local resource.
