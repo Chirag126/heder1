@@ -37,6 +37,7 @@ export type AgentV2TaskResult = {
   result: { resource: string; message: string; body: JsonRecord };
   expenditure: { reservedTinybars: string; reservedHbar: string; paidCalls: number; budgetTinybars: string; budgetHbar: string };
   receipts: Array<{ serviceId: string; transactionId: string; explorerUrl: string; amountTinybars: string; amountHbar: string; status: "settled" }>;
+  warnings?: string[];
 };
 
 function isRecord(value: unknown): value is JsonRecord {
