@@ -110,10 +110,10 @@ export default function App() {
 
   const isTestnet = chain.toLowerCase() === CHAIN_ID;
   const buildUserPolicy = () => ({ mode: agentMode, network: "hedera:testnet" as const, maxPaymentTinybars: Number(maxPaymentTinybars), taskBudgetTinybars: Number(taskBudgetTinybars), dailyBudgetTinybars: Number(dailyBudgetTinybars), maxPaidCallsPerTask: Number(maxPaidCallsPerTask), maxPaidCallsPerDay: Number(maxPaidCallsPerDay), allowedServiceIds, allowedAssets: ["0.0.0"], expiresAt: Date.now() + 120_000, approvalThresholdTinybars: Number(approvalThresholdTinybars) });
-  async function simulatePolicy() {
+  async function simulatePolicy(forcePreview = false) {
     setBusy("simulate"); setError(""); setPolicySimulation(null);
     try {
-      if (agentMode === "preview") {
+      if (forcePreview || agentMode === "preview") {
         const response = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: taskGoal.trim(), policy: buildUserPolicy(), budgetTinybars: Number(taskBudgetTinybars) }) });
         const result = await response.json() as PlanPreview;
         if (!response.ok) throw new Error(result.error ?? "Quote preview failed.");
@@ -195,6 +195,7 @@ export default function App() {
       const policy = buildUserPolicy();
       const goal = taskGoal.trim();
       if (!goal || goal.length > 2000) throw new Error("Enter a task between 1 and 2,000 characters.");
+      if (allowedServiceIds.length === 0) throw new Error("Approve at least one registered service in Spending & Permissions before running a task.");
       const planResponse = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal, policy, budgetTinybars: policy.taskBudgetTinybars }) });
       const plan = await planResponse.json() as { error?: string; selected?: { serviceId: string; amountTinybars: number; amountHbar: string; asset: string; receiverAccountId: string }; paymentAttempted?: boolean };
       if (!planResponse.ok || !plan.selected) throw new Error(plan.error ?? "No eligible quote was found. No payment was attempted.");
@@ -328,7 +329,7 @@ export default function App() {
         <textarea id="task-goal" className="task-textarea" maxLength={2000} value={taskGoal} onChange={event => { setTaskGoal(event.target.value); setPlanDetails(null); setPolicySimulation(null); }} placeholder="Describe the task you want the agent to perform…" />
         <div className="field-meta"><span>Use a specific, bounded request.</span><span>{taskGoal.length}/2000</span></div>
         <div className="playground-controls"><div><strong>Spending mode</strong><small>{agentMode === "preview" ? "Preview only — never signs or pays" : agentMode === "approval-required" ? "Wallet approval required for the exact quote" : "Bounded execution with a one-time policy grant"}</small></div><button className="button secondary" onClick={() => navigate("permissions")}>Review limits & permissions →</button></div>
-        <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => { if (agentMode !== "preview") setAgentMode("preview"); void simulatePolicy(); }}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
+        <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => { if (agentMode !== "preview") setAgentMode("preview"); void simulatePolicy(true); }}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
           <button className="button secondary" disabled={Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled)} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : "Authorize & run task"}</button>
         </div>
         {agentMode === "preview" && <p className="panel-footnote">Preview mode is the default. It performs quote discovery only: no funds are reserved and no payment is attempted.</p>}
@@ -361,7 +362,7 @@ export default function App() {
             ].map(([id, label, description]) => <label key={id} className="allowlist-option"><input type="checkbox" checked={allowedServiceIds.includes(id)} onChange={event => { setAllowedServiceIds(current => event.target.checked ? [...current, id] : current.filter(item => item !== id)); setToken(""); setPolicySimulation(null); setPlanDetails(null); }} /><span><strong>{label}</strong><small>{description}</small><code>{id}</code></span></label>)}
           </div>
           <p className="panel-footnote">Hard ceilings: 100,000 tinybars per payment, 500,000 per task, 1,000,000 per day. HBAR only, Hedera Testnet only. Tinybars: 100,000,000 = 1 HBAR.</p>
-          <div className="action-row"><button className="button secondary" onClick={() => { setAgentMode("preview"); void simulatePolicy(); }} disabled={Boolean(busy) || allowedServiceIds.length === 0}>{busy === "simulate" ? "Checking quotes…" : "Test these limits with a preview"}</button></div>
+          <div className="action-row"><button className="button secondary" onClick={() => { setAgentMode("preview"); void simulatePolicy(true); }} disabled={Boolean(busy) || allowedServiceIds.length === 0}>{busy === "simulate" ? "Checking quotes…" : "Test these limits with a preview"}</button></div>
           {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{policySimulation.allowed ? "Policy check passed" : "Policy check blocked"}</strong><span>{policySimulation.reason}</span></div>}
         </div>
       </section>
