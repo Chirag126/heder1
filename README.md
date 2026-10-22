@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–11 are implemented as a Hedera Testnet prototype. A local wallet-authorized run completed with a 0.0005 HBAR settlement; HashScan/Mirror Node and matching HCS audit-anchor checks were verified for that recorded run. Phase 11 adds user-defined spending policy, no-payment quote planning, quote-specific wallet approval, durable reservations, task/daily accounting, and settlement reconciliation. Controlled multi-service runs are now supported within the signed call and budget limits. Public Render payment execution remains disabled. This is not production-ready payment infrastructure.
+> **Current status:** Phases 0–11 are implemented as a Hedera Testnet prototype. Phase 12 adds PostgreSQL-backed reservations, persistent wallet authorization and quote approvals, task idempotency, x402 proof replay protection, recovery sweeps, and API hardening. Public Render payment execution remains disabled. Database/provider configuration, backup and alert operations, CI results, and deployment acceptance must be verified before treating Phase 12 as complete or the project as production-ready.
 
 ## Table of contents
 
@@ -47,7 +47,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
 - **User spending policy:** wallet-signed limits, per-payment/task/daily budgets, allowlists, short expiry, grant revocation, and a server-side kill switch.
 - **No-payment quote planning:** inspect registered services' actual HTTP 402 quotes and return candidate prices, selected service, and rejection reasons without signing or reserving funds.
-- **Durable reservation ledger:** reservation IDs/status, atomic file replacement, exclusive local-filesystem locking, task-level budget/call accounting, conservative migration of older ledger balances, and operator-controlled settlement reconciliation. Ambiguous outcomes remain reserved.
+- **Durable payment state (Phase 12):** PostgreSQL transactions and advisory locks for wallet-scoped reservations; persistent authorization challenges/grants; durable task idempotency; explicit submitted/unknown states; conservative recovery and legacy JSON cutover. Local JSON is development-only.
 - **Operator reconciliation API:** protected by a server-only `HEDERA_RECONCILIATION_TOKEN`; records operator-confirmed settlement outcomes after independent HashScan/Mirror Node checks. It does not independently prove settlement.
 - **Quote-specific wallet approval:** the dashboard obtains a fresh quote, shows the exact service/amount, requests an EIP-191 message signature, and executes only if the runner rediscovers the same service, network, asset, amount, receiver, and expiry. This is a message signature, not a transaction signature.\n- **Controlled multi-service tasks:** autonomous mode can pay multiple approved services sequentially, within the user-signed task/daily budgets, paid-call caps, step budget, kill switch, and per-payment reservation checks. Quote-specific approval remains one payment only.
 
@@ -212,7 +212,7 @@ pnpm --filter @heder1/api demo:paid-resource
 
 A successful response should include HTTP 200, the protected resource, settlement information, and a transaction reference. Verify the returned transaction independently on [HashScan Testnet](https://hashscan.io/testnet).
 
-The paid-resource duplicate-proof protection is in-memory and is not durable across restarts or multiple instances.
+In local development without DATABASE_URL, paid-resource duplicate-proof protection remains in-memory. With PostgreSQL configured, Phase 12 atomically claims each proof hash and returns a prior settled receipt or blocks a processing/unknown proof without resubmitting it.
 
 ## Phase 2: autonomous payment agent
 
@@ -276,7 +276,7 @@ The API exposes the firewall policy through:
 GET /api/agent/status
 ```
 
-**Limitation:** reservation serialization protects concurrent calls within one Node.js process. The local JSON ledger is not safe for multiple API instances or hosts. Use a transactional shared database before scaling or deploying publicly.
+**Local-development limitation:** the JSON fallback is protected only by a local filesystem lock and is not safe for multiple API instances or hosts. Configure DATABASE_URL to use the Phase 12 transactional PostgreSQL reservation backend.
 
 ## Phase 4: wallet authorization
 
@@ -298,7 +298,7 @@ Security boundaries:
 
 - The frontend never requests or stores a wallet private key or seed phrase.
 - The wallet signature proves control of the signing address; it does not expose the private key to heder1.
-- The authorization store is in-memory and single-process. Restarting the API invalidates outstanding grants.
+- Without DATABASE_URL in local development, the authorization store is in-memory and single-process. With PostgreSQL configured, challenges and one-time grants persist across restarts; production auth endpoints fail closed without the database.
 - Multi-instance deployment requires shared atomic storage, rate limiting, and additional security review.
 - Wallet support depends on the wallet's compatibility with Hedera Testnet EVM chain ID 296.
 - This authorization layer is a prototype and should not be exposed publicly without reviewing origin/CSRF protections, persistence, rate limiting, and wallet/account mapping.
@@ -455,7 +455,7 @@ The repository includes a Render Blueprint at `render.yaml` to deploy the API an
 - Do not expose the agent or demo-payment endpoint publicly. The agent is intentionally disabled in production.
 - The baseline deployment intentionally omits payer and HCS operator private keys. The dashboard and read-only status endpoints can be verified without those credentials; payment readiness remains false until an operator deliberately configures a dedicated testnet payer.
 - If HCS anchoring is needed, create a testnet topic and use a dedicated least-privilege operator. Add its credentials only to the API host's secret environment settings and account for transaction fees.
-- CORS is not authentication or rate limiting. Do not enable payments or configure valuable credentials until public API rate limits, persistent multi-instance storage, monitoring, and an operational security review are in place.
+- CORS is not authentication. Phase 12 adds route/IP rate limits and PostgreSQL-backed state, but provider-level backups, alert routing, restore drills, and an operational security review remain required before enabling valuable credentials.
 
 ### Deployment environment
 
@@ -471,7 +471,7 @@ The Blueprint sets the network to Hedera Testnet and keeps payment execution and
 - Confirm wallet authorization can only issue a grant; agent execution remains disabled in production.
 - Do not perform a live payment as part of the deployment smoke test.
 
-## Phase 11: user-defined spending policy\n\nPhase 11 extends the existing firewall and wallet authorization with a policy object bound to the wallet-signed challenge, a no-payment quote simulation endpoint, signed per-payment/task/daily caps, service and native-HBAR allowlists, grant revocation, and a server-side emergency kill switch. The approval-required runner mode fails closed until an explicit approval-and-resume workflow is implemented. Mainnet remains disabled. See [docs/PHASE-11.md](docs/PHASE-11.md).\n\n## Phase 11: spending policy and payment authorization
+## Phase 11: spending policy and payment authorization
 
 Phase 11 extends the existing Phase 3 spending firewall and Phase 10 runner rather than replacing them.
 
@@ -486,6 +486,21 @@ Phase 11 extends the existing Phase 3 spending firewall and Phase 10 runner rath
 Hard limits remain: Hedera Testnet only; maximum 100,000 tinybars per payment, 500,000 tinybars per task, 1,000,000 tinybars per day, at most 3 paid calls per task and 10 per day. The UI defaults to fewer calls. Multi-service execution is sequential, not parallel, and only code-registered service URLs/native HBAR are accepted.
 
 The reservation ledger is safe only for processes sharing one host filesystem with working lock-directory semantics. It is not a distributed ledger or a multi-machine database. Public Render payment execution remains disabled. See [the spending policy, approval, and reconciliation guide](docs/SPENDING-POLICY.md) for API details and limitations.
+
+## Phase 12: durable payment infrastructure and security
+
+Phase 12 introduces a shared PostgreSQL-backed state store for production payment reservations, wallet authorization challenges/grants, policy versions, task-run idempotency, and sanitized audit metadata.
+
+- Atomic per-wallet/day reservation checks use PostgreSQL transactions and advisory locks, preventing independent API instances from racing the same spending budget.
+- Wallet grants and quote-specific payment approvals persist across restarts. The database stores SHA-256 hashes of bearer tokens, not raw grant tokens.
+- Payment reservations record submitted/settled/failed/rejected/unknown/ambiguous states. A timeout, missing receipt, or invalid receipt is treated as unknown and is never automatically retried.
+- A recovery sweep marks stale in-flight states unknown; operators must verify HashScan/Mirror Node evidence before reconciliation.
+- The old local JSON spending ledger is imported conservatively on first database use. Ambiguous balances and unknown-wallet reservations remain held rather than silently resetting spending limits.
+- API hardening includes rate limits, request-body limits, strict configured-origin CORS, registered-service URL restrictions, and redaction of authorization/payment headers from logs.
+
+**Deployment requirement:** configure the API-only `DATABASE_URL` secret before relying on durable auth or payment state. `render.yaml` now declares this secret as an operator-supplied environment value. Do not expose it to the frontend. Production payment execution remains disabled.
+
+See [docs/PHASE-12.md](docs/PHASE-12.md) for migration behavior, CI database tests, recovery, backup/restore commands, monitoring guidance, and remaining operational acceptance work. This phase does not make the project production-ready by itself; provider backups, alert routing, restore drills, and a security review remain operator responsibilities.
 
 ## Validation and testing
 
@@ -574,7 +589,7 @@ The policy and reservation work extends the existing spending firewall and appro
 
 Read [the spending policy operations guide](docs/SPENDING-POLICY.md) for API examples, migration notes, operational safeguards, and limitations.
 
-**Still not complete:** the backend supports quote-specific wallet approval and one-time resume authorization, but the dashboard does not yet guide users through every approval step. The executor intentionally makes at most one paid call per task. Task accounting enforces a multi-call budget/call limit for reservations, but multi-service payment execution is not enabled. The local JSON ledger is not a distributed database; do not use it across separate hosts or ephemeral instances. Mainnet and additional assets remain disabled.
+**Still not complete:** the dashboard does not yet guide users through every approval step. Autonomous execution is sequential and bounded by signed budgets and call limits. The local JSON fallback is not a distributed database; production requires PostgreSQL. Mainnet and additional assets remain disabled.
 
 ## Limitations and future work
 

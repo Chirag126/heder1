@@ -88,7 +88,7 @@ test("Phase 10 status and run remain disabled by default", async () => {
   const status = await app.inject({ method: "GET", url: "/api/agent/v2/status" });
   assert.equal(status.statusCode, 200);
   assert.equal(status.json().enabled, false);
-  const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { goal: "Find the cheapest short report" } });
+  const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { runId: "123e4567-e89b-12d3-a456-426614174000", goal: "Find the cheapest short report" } });
   assert.equal(run.statusCode, 403);
   assert.match(run.json().error, /disabled/);
 });
@@ -126,7 +126,7 @@ test("Phase 10 stops through the API without paying when every 402 quote exceeds
     });
   };
   try {
-    const challenge = createAuthorizationChallenge(wallet.address, Date.now(), AUTHORIZATION_SCOPE_V2);
+    const challenge = await createAuthorizationChallenge(wallet.address, Date.now(), AUTHORIZATION_SCOPE_V2);
     const signature = await wallet.signMessage(challenge.message);
     const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature });
     const response = await app.inject({

@@ -10,6 +10,8 @@ services:
         value: 24.22.0
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        sync: false
       - key: HEDERA_NETWORK
         value: testnet
       - key: HEDERA_CORS_ORIGINS
