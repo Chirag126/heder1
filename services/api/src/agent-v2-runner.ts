@@ -205,6 +205,7 @@ export async function runAgentV2Task(
   }
   if (limits.maxPaidCalls < 1) throw new Error("Paid-call limit reached before payment.");
 
+  const approvedQuote = options.approvedQuote;
   const eligibleCandidates = approvedQuote
     ? decision.eligible.filter(candidate =>
         candidate.service.id === approvedQuote.serviceId &&
