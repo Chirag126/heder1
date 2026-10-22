@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { databaseConfigured } from "./database.js";
+import { listPostgresReservations, reconcilePostgresReservation, reservePostgresSpend, transitionPostgresReservation } from "./postgres-spending-ledger.js";
 
-export type ReservationStatus = "reserved" | "settled" | "failed" | "ambiguous";
+export type ReservationStatus = "reserved" | "submitted" | "settled" | "rejected" | "failed" | "unknown" | "ambiguous";
 export type DurableReservation = {
   id: string;
   day: string;
@@ -42,7 +44,7 @@ async function loadLedger(path: string): Promise<Ledger> {
     }
     if (raw.version !== 2 || !Array.isArray(raw.entries) || !Array.isArray(raw.reservations)) throw new Error("Spending ledger has an unsupported format; payments are blocked.");
     for (const r of raw.reservations) {
-      if (!r || typeof r.id !== "string" || typeof r.day !== "string" || !Number.isSafeInteger(r.amountTinybars) || r.amountTinybars <= 0 || !["reserved", "settled", "failed", "ambiguous"].includes(r.status)) throw new Error("Spending ledger contains invalid reservation data; payments are blocked.");
+      if (!r || typeof r.id !== "string" || typeof r.day !== "string" || !Number.isSafeInteger(r.amountTinybars) || r.amountTinybars <= 0 || !["reserved", "submitted", "settled", "rejected", "failed", "unknown", "ambiguous"].includes(r.status)) throw new Error("Spending ledger contains invalid reservation data; payments are blocked.");
     }
     return raw as Ledger;
   } catch (error) {
@@ -121,7 +123,7 @@ export async function reconcileDurableReservation(input: {
     const ledger = await loadLedger(path);
     const reservation = ledger.reservations.find(r => r.id === input.reservationId);
     if (!reservation) return { updated: false as const, reason: "Reservation not found." };
-    if (reservation.status === "settled" || reservation.status === "failed") {
+    if (reservation.status === "settled" || reservation.status === "failed" || reservation.status === "rejected") {
       if (reservation.status === input.outcome) return { updated: true as const, reservation };
       return { updated: false as const, reason: "Terminal reservation status cannot be changed." };
     }
@@ -135,6 +137,52 @@ export async function reconcileDurableReservation(input: {
     reservation.status = input.outcome;
     reservation.transactionId = input.transactionId?.trim();
     reservation.note = input.note.slice(0, 500);
+    reservation.updatedAt = now.toISOString();
+    await persist(path, ledger);
+    return { updated: true as const, reservation };
+  });
+}
+
+
+/** Persist a conservative lifecycle transition before/after the external facilitator call. */
+export async function transitionDurableReservation(input: {
+  reservationId: string;
+  status: ReservationStatus;
+  transactionId?: string;
+  note?: string;
+}, options: { path?: string; now?: Date } = {}) {
+  if (databaseConfigured()) return transitionPostgresReservation(input);
+  if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for payment-state transitions in production.");
+  const path = pathFor(options.path);
+  const now = options.now ?? new Date();
+  const allowed: Record<ReservationStatus, ReservationStatus[]> = {
+    reserved: ["submitted", "settled", "rejected", "failed", "unknown", "ambiguous"],
+    submitted: ["settled", "failed", "unknown", "ambiguous"],
+    unknown: ["settled", "failed", "ambiguous"],
+    ambiguous: ["settled", "failed"],
+    settled: [], failed: [], rejected: [],
+  };
+  return withLock(path, async () => {
+    const ledger = await loadLedger(path);
+    const reservation = ledger.reservations.find(r => r.id === input.reservationId);
+    if (!reservation) return { updated: false as const, reason: "Reservation not found." };
+    if (reservation.status === input.status) return { updated: true as const, reservation };
+    if (!allowed[reservation.status].includes(input.status)) {
+      return { updated: false as const, reason: `Invalid reservation transition ${reservation.status} -> ${input.status}.` };
+    }
+    if (input.status === "settled" && !input.transactionId?.trim() && !reservation.transactionId) {
+      return { updated: false as const, reason: "A transaction ID is required to mark a reservation settled." };
+    }
+    if (input.status === "failed" || input.status === "rejected") {
+      const entry = ledger.entries.find(e => e.day === reservation.day);
+      if (entry && entry.reservedTinybars >= reservation.amountTinybars) {
+        entry.reservedTinybars -= reservation.amountTinybars;
+        entry.updatedAt = now.toISOString();
+      }
+    }
+    reservation.status = input.status;
+    if (input.transactionId?.trim()) reservation.transactionId = input.transactionId.trim();
+    if (input.note) reservation.note = input.note.slice(0, 500);
     reservation.updatedAt = now.toISOString();
     await persist(path, ledger);
     return { updated: true as const, reservation };
