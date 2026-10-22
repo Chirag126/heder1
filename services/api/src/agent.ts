@@ -129,7 +129,7 @@ export async function runPaymentAgent(accountId?: string) {
     );
 
   const paidFetch = wrapFetchWithPayment(fetch, client);
-  const response = await paidFetch(decision.url, { method: "GET", signal: AbortSignal.timeout(45_000) });
+  const response = await paidFetch(decision.url, { method: "GET", redirect: "error", signal: AbortSignal.timeout(45_000) });
   const body: unknown = await response.json().catch(() => null);
   const receipt = extractSettlementReceipt(response.status, body);
 
