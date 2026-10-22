@@ -326,3 +326,13 @@ export async function closeDatabasePool(): Promise<void> {
   pool = undefined;
   readyPromise = undefined;
 }
+
+/** Lightweight readiness probe; database errors are handled by the readiness route. */
+export async function checkDatabaseHealth(): Promise<{ configured: boolean; reachable: boolean }> {
+  if (!databaseConfigured()) return { configured: false, reachable: false };
+  await ensureDatabaseReady();
+  const database = getDatabasePool();
+  if (!database) return { configured: true, reachable: false };
+  await database.query("SELECT 1");
+  return { configured: true, reachable: true };
+}
