@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–9 are implemented, and Phase 9 live acceptance has been verified on Hedera Testnet. Phase 10's deterministic multi-service runner has completed a local wallet-authorized testnet run; the API reported a 0.0005 HBAR settlement and returned a transaction receipt. Independent HashScan confirmation and matching Phase 10 HCS audit-anchor verification are still operator checklist items documented below. Public Render payment execution remains disabled. This remains a testnet prototype, not production-ready payment infrastructure.
+> **Current status:** Phases 0–10 are implemented as a Hedera Testnet prototype. A local Phase 10 wallet-authorized run completed with a 0.0005 HBAR settlement; HashScan/Mirror Node and both matching HCS audit-anchor checks were verified for that recorded run. User policy, quote preview, quote-specific wallet approval APIs, and durable reservation/reconciliation operations are implemented on the feature branch described in the spending-policy guide. Public Render payment execution remains disabled. This is not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -49,6 +49,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **No-payment quote planning:** inspect registered services' actual HTTP 402 quotes and return candidate prices, selected service, and rejection reasons without signing or reserving funds.
 - **Durable reservation ledger:** reservation IDs/status, atomic file replacement, exclusive local-filesystem locking, task-level budget/call accounting, conservative migration of older ledger balances, and operator-controlled settlement reconciliation. Ambiguous outcomes remain reserved.
 - **Operator reconciliation API:** protected by a server-only `HEDERA_RECONCILIATION_TOKEN`; records operator-confirmed settlement outcomes after independent HashScan/Mirror Node checks. It does not independently prove settlement.
+- **Quote-specific wallet approval:** a short-lived EIP-191 message binds the wallet approval to the exact service, network, asset, amount, receiver, policy, and expiry. The runner rediscovers the quote and fails closed if it changes. Backend endpoints are implemented; the guided dashboard flow remains to be integrated.
 
 ## Architecture
 
@@ -557,7 +558,7 @@ The policy and reservation work extends the existing spending firewall and appro
 
 Read [the spending policy operations guide](docs/SPENDING-POLICY.md) for API examples, migration notes, operational safeguards, and limitations.
 
-**Still not complete:** the wallet-signed approve-and-resume flow is not implemented, and the executor intentionally makes at most one paid call per task. Task accounting is prepared to enforce a multi-call budget, but multi-service payment execution is not enabled. The local JSON ledger is not a distributed database; do not use it across separate hosts or ephemeral instances. Mainnet and additional assets remain disabled.
+**Still not complete:** the backend supports quote-specific wallet approval and one-time resume authorization, but the dashboard does not yet guide users through every approval step. The executor intentionally makes at most one paid call per task. Task accounting enforces a multi-call budget/call limit for reservations, but multi-service payment execution is not enabled. The local JSON ledger is not a distributed database; do not use it across separate hosts or ephemeral instances. Mainnet and additional assets remain disabled.
 
 ## Limitations and future work
 
