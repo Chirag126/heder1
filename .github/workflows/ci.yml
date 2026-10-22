@@ -8,6 +8,22 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: heder1
+          POSTGRES_PASSWORD: heder1_test
+          POSTGRES_DB: heder1_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U heder1 -d heder1_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HEDER1_TEST_DATABASE_URL: postgresql://heder1:heder1_test@localhost:5432/heder1_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
