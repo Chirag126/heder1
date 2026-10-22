@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–15 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Phase 15 adds a bounded, read-only Hedera Testnet account-context tool backed by the public Mirror Node API; Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies to avoid unnecessary migration risk. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
+> **Current status:** Phases 0–16 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Phase 15 adds a bounded, read-only Hedera Testnet account-context tool backed by the public Mirror Node API; Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies to avoid unnecessary migration risk. Phase 16 adds public pricing disclosure, bounded cost estimates, per-wallet daily task quotas, and receipt-based actual cost reports. The current runner is deterministic and does not call an LLM; hosted-agent billing and model-provider integration are deferred until actual operating costs and a model path are established. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
 
 ## Table of contents
 
@@ -30,6 +30,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
 - [Phase 13: mainnet readiness gate](docs/PHASE-13.md)
 - [Phase 14: product UI and normal-user experience](docs/PHASE-14.md)\n- [Phase 15: optional Hedera integrations and read-only network tool](docs/PHASE-15.md)
+- [Phase 16: cost, pricing and sustainable service operation](docs/PHASE-16.md)
 - [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
@@ -44,6 +45,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Wallet authorization:** verify a wallet-signed challenge and issue a short-lived, single-use authorization grant.
 - **Tamper-evident audit log:** link local JSONL records using a SHA-256 hash chain.
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.\n- **Read-only Hedera network context (Phase 15):** query a validated Testnet account ID through the fixed public Mirror Node endpoint; returns a sanitized balance/account snapshot and writes an audit event without signing or submitting transactions.
+- **Cost transparency and quotas (Phase 16):** public pricing disclosure, estimate-only resource costs based on informational hints, per-wallet rolling-24-hour task quota, and receipt-based actual resource payment reports. Heder1 service fee is currently zero; hosting is explicitly unallocated rather than described as free.
 - **Guided multi-page product UI (Phase 14):** separate Overview, Agent Playground, Spending & Permissions, Payments & Receipts, and Audit & HCS Evidence pages with mobile-friendly navigation, task quote comparison, allowlist controls, a browser-side pause for new runs, and clearer settlement warnings. The browser pause is not a substitute for the API-side emergency kill switch.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
@@ -55,6 +57,8 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Quote-specific wallet approval:** the dashboard obtains a fresh quote, shows the exact service/amount, requests an EIP-191 message signature, and executes only if the runner rediscovers the same service, network, asset, amount, receiver, and expiry. This is a message signature, not a transaction signature.
 - **Controlled multi-service tasks:** autonomous mode can pay multiple approved services sequentially, within the user-signed task/daily budgets, paid-call caps, step budget, kill switch, and per-payment reservation checks. Quote-specific approval remains one payment only.
 - **Phase 13 network modes:** API-reported network availability, testnet-only execution, mainnet facilitator and Mirror Node checks, HBAR/HTS decimals and balance validation, maximum-exposure validation, and a separate short-lived wallet-signed readiness grant. Readiness never enables or executes a mainnet payment; see [docs/PHASE-13.md](docs/PHASE-13.md).
+
+- **Phase 16 cost disclosure:** See [docs/PHASE-16.md](docs/PHASE-16.md) for pricing endpoints, task quota configuration, cost categories, and deliberate deferrals.
 
 ## Architecture
 
