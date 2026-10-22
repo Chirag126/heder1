@@ -14,6 +14,7 @@ import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import { claimTaskRun, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
 import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadinessChallenge, verifyMainnetReadinessChallenge, type MainnetReadinessInput } from "./mainnet-readiness.js";
+import { getTestnetAccountSnapshot } from "./hedera-readonly-tools.js";
 
 export const app = Fastify({
   logger: {
@@ -369,6 +370,28 @@ app.get<{ Querystring: { topicId?: string; sequenceNumber?: string; auditHash?: 
     return reply.code(result.valid ? 200 : 404).send(result);
   } catch (error) {
     return reply.code(400).send({ valid: false, error: error instanceof Error ? error.message : "HCS verification failed." });
+  }
+});
+
+/** Phase 15 allowlisted read-only network context. Never signs or submits transactions. */
+app.get<{ Params: { accountId: string } }>("/api/integrations/hedera/testnet/accounts/:accountId", {
+  schema: { params: { type: "object", additionalProperties: false, required: ["accountId"], properties: {
+    accountId: { type: "string", pattern: "^0\\.0\\.[1-9]\\d{0,19}$", maxLength: 24 },
+  } } },
+}, async (request, reply) => {
+  try {
+    const snapshot = await getTestnetAccountSnapshot(request.params.accountId);
+    await appendAuditEvent({ event: "integration.hedera.account_queried", outcome: "accepted", details: {
+      network: snapshot.network, accountId: snapshot.accountId, source: snapshot.source, readOnly: true,
+    } });
+    return snapshot;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Read-only Hedera account query failed.";
+    const notFound = message.includes("account was not found");
+    await appendAuditEvent({ event: "integration.hedera.account_query_failed", outcome: "rejected", details: {
+      network: "hedera:testnet", accountId: request.params.accountId, reason: message,
+    } }).catch(() => undefined);
+    return reply.code(notFound ? 404 : 502).send({ error: message, network: "hedera:testnet", readOnly: true });
   }
 });
 
