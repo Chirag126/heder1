@@ -39,6 +39,27 @@ const allowedOrigins = new Set([
   ...(process.env.NODE_ENV === "production" ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"]),
 ]);
 
+
+const userSpendingPolicyJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode","network","maxPaymentTinybars","taskBudgetTinybars","dailyBudgetTinybars","maxPaidCallsPerTask","maxPaidCallsPerDay","allowedServiceIds","allowedAssets","expiresAt","approvalThresholdTinybars"],
+  properties: {
+    mode: { type: "string", enum: ["preview","autonomous","approval-required"] },
+    network: { type: "string", const: "hedera:testnet" },
+    maxPaymentTinybars: { type: "integer", minimum: 1, maximum: 100000 },
+    taskBudgetTinybars: { type: "integer", minimum: 1, maximum: 500000 },
+    dailyBudgetTinybars: { type: "integer", minimum: 1, maximum: 1000000 },
+    maxPaidCallsPerTask: { type: "integer", minimum: 1, maximum: 3 },
+    maxPaidCallsPerDay: { type: "integer", minimum: 1, maximum: 10 },
+    allowedServiceIds: { type: "array", minItems: 1, maxItems: 2, uniqueItems: true, items: { type: "string", enum: ["heder1-full-report","heder1-short-summary"] } },
+    allowedAssets: { type: "array", minItems: 1, maxItems: 1, items: { type: "string", const: "0.0.0" } },
+    expiresAt: { type: "integer", minimum: 1 },
+    approvalThresholdTinybars: { type: "integer", minimum: 0, maximum: 100000 },
+  },
+} as const;
+
+
 // Exact-origin CORS allowlist. Never reflect arbitrary Origin values or enable credentials.
 app.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
@@ -138,7 +159,17 @@ app.get("/api/x402/summary", handleShortSummaryResource);
 
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
-app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: UserSpendingPolicy } }>("/api/authorization/challenge", async (request, reply) => {
+app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: UserSpendingPolicy } }>("/api/authorization/challenge", {
+  schema: { body: {
+    type: "object", additionalProperties: false, required: ["account","chainId"],
+    properties: {
+      account: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      chainId: { type: "integer", const: 296 },
+      scope: { type: "string", enum: [AUTHORIZATION_SCOPE_V2, "heder1:agent-run:single-payment"] },
+      policy: userSpendingPolicyJsonSchema,
+    },
+  } },
+}, async (request, reply) => {
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
@@ -152,7 +183,12 @@ app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: 
 });
 
 /** Verify an EIP-191 personal_sign signature and issue a short-lived, single-use grant. */
-app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/verify", async (request, reply) => {
+app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/verify", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["nonce","signature"], properties: {
+    nonce: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" },
+    signature: { type: "string", minLength: 130, maxLength: 132, pattern: "^0x[0-9a-fA-F]+$" },
+  } } },
+}, async (request, reply) => {
   if (typeof request.body?.nonce !== "string" || typeof request.body?.signature !== "string") {
     return reply.code(400).send({ error: "Challenge nonce and wallet signature are required." });
   }
@@ -328,7 +364,19 @@ type PaymentApprovalChallengeBody = {
   policy?: UserSpendingPolicy;
   quote?: { serviceId?: string; network?: string; asset?: string; amountTinybars?: number; receiverAccountId?: string };
 };
-app.post<{ Body: PaymentApprovalChallengeBody }>("/api/agent/v2/approval/challenge", async (request, reply) => {
+app.post<{ Body: PaymentApprovalChallengeBody }>("/api/agent/v2/approval/challenge", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["account","policy","quote"], properties: {
+    account: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+    policy: userSpendingPolicyJsonSchema,
+    quote: { type: "object", additionalProperties: false, required: ["serviceId","network","asset","amountTinybars","receiverAccountId"], properties: {
+      serviceId: { type: "string", enum: ["heder1-full-report","heder1-short-summary"] },
+      network: { type: "string", const: "hedera:testnet" },
+      asset: { type: "string", const: "0.0.0" },
+      amountTinybars: { type: "integer", minimum: 1, maximum: 100000 },
+      receiverAccountId: { type: "string", pattern: "^0\\.0\\.\\d+$" },
+    } },
+  } } },
+}, async (request, reply) => {
   const body = request.body;
   const q = body?.quote;
   if (typeof body?.account !== "string" || !body.policy || !q ||
@@ -348,7 +396,12 @@ app.post<{ Body: PaymentApprovalChallengeBody }>("/api/agent/v2/approval/challen
   } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not create payment approval challenge." }); }
 });
 
-app.post<{ Body: { nonce?: string; signature?: string } }>("/api/agent/v2/approval/verify", async (request, reply) => {
+app.post<{ Body: { nonce?: string; signature?: string } }>("/api/agent/v2/approval/verify", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["nonce","signature"], properties: {
+    nonce: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" },
+    signature: { type: "string", minLength: 130, maxLength: 132, pattern: "^0x[0-9a-fA-F]+$" },
+  } } },
+}, async (request, reply) => {
   if (typeof request.body?.nonce !== "string" || typeof request.body?.signature !== "string") return reply.code(400).send({ error: "nonce and wallet signature are required." });
   try {
     const approval = await verifyPaymentApproval({ nonce: request.body.nonce, signature: request.body.signature });
@@ -399,7 +452,15 @@ app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", a
   } catch (error) { return reply.code(500).send({ updated: false, error: error instanceof Error ? error.message : "Could not reconcile reservation." }); }
 });
 
-app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", async (request, reply) => {
+app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["runId","goal"], properties: {
+    runId: { type: "string", format: "uuid" },
+    goal: { type: "string", minLength: 1, maxLength: 2000 },
+    budgetTinybars: { type: "integer", minimum: 1, maximum: 500000 },
+    maxPaidCalls: { type: "integer", minimum: 1, maximum: 3 },
+    allowedServiceIds: { type: "array", maxItems: 2, uniqueItems: true, items: { type: "string", enum: ["heder1-full-report","heder1-short-summary"] } },
+  } } },
+}, async (request, reply) => {
   if (!isAgentV2Enabled()) {
     return reply.code(403).send({ error: "Agent v2 is disabled.", hint: "For local testnet testing only, set HEDERA_AGENT_V2_ENABLED=true and HEDERA_NETWORK=testnet. Never enable payment execution on public Render." });
   }
