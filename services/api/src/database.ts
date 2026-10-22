@@ -241,29 +241,6 @@ export async function consumeRateLimit(key: string, limit: number, windowMs: num
 }
 const localRateLimits = new Map<string, { startedAt: number; count: number }>();
 
-export async function claimTaskRun(input: { runId: string; walletAddress: string; idempotencyKey: string; requestHash: string }): Promise<boolean> {
-  const wallet = await ensureUser(input.walletAddress);
-  const db = getDatabasePool();
-  if (!db) return true;
-  const result = await db.query(
-    `INSERT INTO task_runs(run_id, wallet_address, idempotency_key, request_hash, status)
-     VALUES ($1,$2,$3,$4,'quoted')
-     ON CONFLICT DO NOTHING RETURNING run_id`,
-    [input.runId, wallet, input.idempotencyKey, input.requestHash],
-  );
-  return Boolean(result.rowCount);
-}
-
-export async function updateTaskRun(runId: string, walletAddress: string, status: "quoted"|"reserved"|"submitted"|"settled"|"rejected"|"failed"|"unknown", response?: unknown, errorCode?: string): Promise<void> {
-  const wallet = await ensureUser(walletAddress);
-  const db = getDatabasePool();
-  if (!db) return;
-  await db.query(
-    "UPDATE task_runs SET status=$3, response=$4::jsonb, error_code=$5, updated_at=now() WHERE run_id=$1 AND wallet_address=$2",
-    [runId, wallet, status, response === undefined ? null : JSON.stringify(response), errorCode ?? null],
-  );
-}
-
 export async function closeDatabasePool(): Promise<void> {
   if (pool) await pool.end();
   pool = undefined;
