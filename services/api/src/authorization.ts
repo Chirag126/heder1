@@ -89,3 +89,10 @@ export function consumeAuthorizationGrant(
   grants.delete(token);
   return { allowed: true as const, account: grant.account, scope: grant.scope, policy: grant.policy };
 }
+
+/** Revoke an unconsumed single-use grant. Consumed grants are no longer reusable; active runs use the cancellation endpoint. */
+export function revokeAuthorizationGrant(token: string | undefined) {
+  if (!token) return { revoked: false as const, reason: "Authorization token is required." };
+  const revoked = grants.delete(token);
+  return revoked ? { revoked: true as const } : { revoked: false as const, reason: "Grant is invalid, expired, already consumed, or already revoked." };
+}
