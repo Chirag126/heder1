@@ -44,7 +44,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Wallet authorization:** verify a wallet-signed challenge and issue a short-lived, single-use authorization grant.
 - **Tamper-evident audit log:** link local JSONL records using a SHA-256 hash chain.
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
-- **Guided multi-page product UI (Phase 14):** separate Overview, Agent Playground, Spending & Permissions, Payments & Receipts, and Audit & HCS Evidence pages with mobile-friendly navigation, task quote comparison, allowlist controls, and clearer settlement warnings.
+- **Guided multi-page product UI (Phase 14):** separate Overview, Agent Playground, Spending & Permissions, Payments & Receipts, and Audit & HCS Evidence pages with mobile-friendly navigation, task quote comparison, allowlist controls, a browser-side pause for new runs, and clearer settlement warnings. The browser pause is not a substitute for the API-side emergency kill switch.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
 - **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
