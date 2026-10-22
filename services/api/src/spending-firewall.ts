@@ -110,7 +110,7 @@ export async function reserveAgentSpend(
  */
 export async function reserveAgentV2Spend(
   input: { amountTinybars: string; receiverAccountId: string; resourceUrl: string },
-  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number } = {},
+  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number } = {},
 ): Promise<FirewallReservation> {
   const amount = Number(input.amountTinybars);
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > Math.min(FIREWALL_MAX_PAYMENT_TINYBARS, options.maxPaymentTinybars ?? FIREWALL_MAX_PAYMENT_TINYBARS)) {
@@ -136,6 +136,9 @@ export async function reserveAgentV2Spend(
     now: options.now,
     dailyBudgetTinybars: Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS),
     maxAttemptsPerDay: Math.min(FIREWALL_MAX_ATTEMPTS_PER_DAY, options.maxAttemptsPerDay ?? FIREWALL_MAX_ATTEMPTS_PER_DAY),
+    taskId: options.taskId,
+    taskBudgetTinybars: options.taskBudgetTinybars,
+    maxPaidCallsPerTask: options.maxPaidCallsPerTask,
   });
   return result;
 }
