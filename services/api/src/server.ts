@@ -8,6 +8,7 @@ import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
 
 export const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -82,11 +83,11 @@ app.get("/api/x402/summary", handleShortSummaryResource);
 
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
-app.post<{ Body: { account?: string; chainId?: number; scope?: string } }>("/api/authorization/challenge", async (request, reply) => {
+app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: UserSpendingPolicy } }>("/api/authorization/challenge", async (request, reply) => {
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
-    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope);
+    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope, request.body.policy);
     await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { account: request.body.account, chainId: 296, nonce: challenge.nonce, expiresAt: challenge.expiresAt } });
     return challenge;
   } catch (error) {
@@ -181,6 +182,36 @@ app.get("/api/agent/status", async () => ({
 // Restarting the API cancels all in-flight work.
 const agentV2Runs = new Map<string, AbortController>();
 const agentV2CompletedRuns = new Set<string>();
+
+app.get("/api/agent/v2/policy", async () => ({
+  killSwitchEnabled: process.env.HEDERA_AGENT_KILL_SWITCH === "true",
+  policy: { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 },
+  hardCeilings: { maxPaymentTinybars: 100_000, taskBudgetTinybars: 500_000, dailyBudgetTinybars: 1_000_000, maxPaidCallsPerTask: 3, maxPaidCallsPerDay: 10 },
+  supportedModes: ["preview", "autonomous", "approval-required"],
+  network: "hedera:testnet",
+  mainnetEnabled: false,
+}));
+
+app.post<{ Body: { policy?: UserSpendingPolicy; quote?: { serviceId?: string; network?: string; asset?: string; amountTinybars?: number; taskSpentTinybars?: number; dailyReservedTinybars?: number; paidCallsThisTask?: number; paidCallsToday?: number; now?: number } }> }>("/api/agent/v2/policy/simulate", async (request, reply) => {
+  const policy = request.body?.policy;
+  const quote = request.body?.quote;
+  if (!policy || !quote || typeof quote.serviceId !== "string" || typeof quote.network !== "string" || typeof quote.asset !== "string" || typeof quote.amountTinybars !== "number") {
+    return reply.code(400).send({ allowed: false, reason: "A complete policy and quote (serviceId, network, asset, amountTinybars) are required." });
+  }
+  const errors = validateUserSpendingPolicy(policy);
+  if (errors.length) return reply.code(400).send({ allowed: false, reason: errors.join(" ") });
+  return simulateSpendingPolicy(policy, {
+    serviceId: quote.serviceId,
+    network: quote.network,
+    asset: quote.asset,
+    amountTinybars: quote.amountTinybars,
+    taskSpentTinybars: quote.taskSpentTinybars,
+    dailyReservedTinybars: quote.dailyReservedTinybars,
+    paidCallsThisTask: quote.paidCallsThisTask,
+    paidCallsToday: quote.paidCallsToday,
+    now: quote.now,
+  });
+});
 
 app.get("/api/agent/v2/status", async () => ({
   enabled: isAgentV2Enabled(),
