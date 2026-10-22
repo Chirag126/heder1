@@ -1,6 +1,6 @@
 # User spending policy, planning, and reservation operations
 
-This document describes the user-defined policy and reservation work currently implemented on top of the existing x402 runner. It is a Testnet-only prototype, not production payment infrastructure.
+This document describes the Phase 11 user-defined policy and reservation APIs. Phase 12 adds PostgreSQL-backed storage and recovery behavior; see [the Phase 12 operations guide](PHASE-12.md). The project remains Hedera Testnet-only and is not production-ready until the deployment and operational acceptance steps are complete.
 
 ## Implemented
 
@@ -66,11 +66,9 @@ The reconciliation API records an operator's decision; it does not independently
 
 ## Reservation storage and migration
 
-The default ledger path is `./data/spending-firewall.json`, configurable with `HEDERA_FIREWALL_LEDGER_PATH`. Version 2 records reservations, status, timestamps, transaction ID (when reconciled), and optional task ID. Writes use a unique temporary file plus rename while holding an exclusive lock directory. Lock acquisition times out and fails closed rather than permitting a payment. If a process crashes while holding a lock, the stale `.lock` directory may require operator inspection and removal after confirming no process is using it; never remove an active lock.
+Without DATABASE_URL in local development, the fallback ledger path is ./data/spending-firewall.json, configurable with HEDERA_FIREWALL_LEDGER_PATH. Version 2 records reservations and status and uses atomic replacement plus a local lock directory. This fallback is for local development only and is not safe for multi-instance payment execution.
 
-Version-1 aggregate balances are migrated conservatively. Existing reserved balances become ambiguous legacy records, and are retained in the daily totals. They cannot be attributed to an individual payment, so review the ledger and reconcile carefully before any release.
-
-This design is suitable for a single host where all processes share the same filesystem and lock semantics. It is **not** a distributed database or safe for separate machines, ephemeral deployment filesystems, or serverless instances with independent disks. For that, replace the file ledger with a transactional shared database and row-level/serializable locking before enabling concurrent payment workers.
+When DATABASE_URL is configured, Phase 12 uses PostgreSQL transactions and advisory locks for wallet-scoped reservations. The first database-backed ledger operation conservatively imports the prior JSON ledger once; ambiguous balances remain held, and the source file is not deleted. In production, payment reservation and reconciliation operations fail closed if DATABASE_URL is absent. See PHASE-12.md for the schema, migration behavior, backups, and recovery sweep.
 
 ## Quote-specific wallet approval
 
@@ -84,7 +82,7 @@ The API now supports a backend wallet-signature approval path for an exact disco
 
 The challenge/verify approval token can authorize one exact quote only and is consumed once. A changed quote requires a new wallet approval. The existing dashboard does not yet expose all of these API steps as a guided UI; the backend endpoints are available for integration and tests.
 
-The runner still executes at most one paid call per task. Durable task-level reservation accounting rejects repeated reservations beyond the signed task budget/call limit, but multi-service payment execution is not enabled yet.
+Autonomous mode can execute multiple eligible services sequentially within the signed task budget and paid-call cap. Each payment receives its own reservation; uncertain outcomes remain reserved and the runner stops rather than retrying automatically.
 
 ## Validation
 
@@ -99,3 +97,10 @@ pnpm build
 ```
 
 Do not enable public Render payment execution. Use Hedera Testnet and dedicated test accounts. Passing automated checks is not a production security audit.
+
+
+## Phase 12 durable storage
+
+Production use requires an API-only DATABASE_URL. Wallet authorization challenges, one-time grants, quote-specific approvals, task IDs, reservation state, and sanitized audit metadata are stored in PostgreSQL. Bearer grants are stored as SHA-256 hashes and consumed atomically. Rate limits use shared database buckets when the database is configured.
+
+The recovery sweep marks stale reserved/submitted states unknown. It does not infer that a timeout means failure and does not release funds. Verify HashScan/Mirror Node evidence before using the operator reconciliation API. See [docs/PHASE-12.md](PHASE-12.md) for the full operational guide and limitations.
