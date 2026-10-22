@@ -12,7 +12,7 @@ import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationC
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
-import { claimTaskRun, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
+import { claimTaskRun, checkDatabaseHealth, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
 import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadinessChallenge, verifyMainnetReadinessChallenge, type MainnetReadinessInput } from "./mainnet-readiness.js";
 import { getTestnetAccountSnapshot } from "./hedera-readonly-tools.js";
 import { dailyTaskQuota, estimateTaskCost, getPublicPricing, reportActualTaskCost } from "./cost-report.js";
@@ -65,6 +65,11 @@ const userSpendingPolicyJsonSchema = {
 
 // Exact-origin CORS allowlist. Never reflect arbitrary Origin values or enable credentials.
 app.addHook("onRequest", async (request, reply) => {
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header("X-Frame-Options", "DENY");
+  reply.header("Referrer-Policy", "no-referrer");
+  reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  reply.header("Cross-Origin-Resource-Policy", "same-site");
   const origin = request.headers.origin;
   if (origin) {
     const normalizedOrigin = origin.replace(/\/$/, "");
@@ -112,11 +117,22 @@ app.addHook("onRequest", async (request, reply) => {
   }
 });
 
+app.get("/api/health/ready", async (_request, reply) => {
+  if (process.env.NODE_ENV !== "production" && !databaseConfigured()) return { status: "ready", service: "heder1-api", storage: "local-development-only", paymentExecutionEnabled: false };
+  try {
+    const database = await checkDatabaseHealth();
+    if (!database.configured || !database.reachable) return reply.code(503).send({ status: "not-ready", service: "heder1-api", reason: "Required shared storage is not configured or reachable.", paymentExecutionEnabled: false });
+    return { status: "ready", service: "heder1-api", storage: "postgresql", paymentExecutionEnabled: false };
+  } catch {
+    return reply.code(503).send({ status: "not-ready", service: "heder1-api", reason: "Required shared storage health check failed.", paymentExecutionEnabled: false });
+  }
+});
+
 app.get("/api/health", async () => ({
   status: "ok",
   service: "heder1-api",
   network: process.env.HEDERA_NETWORK ?? "testnet",
-  phase: "phase-12-durable-payment-infrastructure",
+  phase: "phase-17-production-hardening",
   storage: databaseConfigured() ? "postgresql-configured" : process.env.NODE_ENV === "production" ? "postgresql-missing" : "local-development-only",
 }));
 
