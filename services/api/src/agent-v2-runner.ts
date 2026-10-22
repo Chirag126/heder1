@@ -266,7 +266,7 @@ export async function runAgentV2Task(
       maxAttemptsPerDay: policy.maxPaidCallsPerDay,
       taskId: runId,
       taskBudgetTinybars: limits.budgetTinybars,
-      maxPaidCallsPerTask: limits.maxPaidCallsPerTask,
+      maxPaidCallsPerTask: limits.maxPaidCalls,
     });
     if (!reservation.allowed) {
       warnings.push(`Stopped before ${candidate.service.id}: ${reservation.reason}`);
