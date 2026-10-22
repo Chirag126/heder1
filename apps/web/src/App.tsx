@@ -41,6 +41,8 @@ export default function App() {
   const [policySimulation, setPolicySimulation] = useState<{ allowed: boolean; requiresApproval?: boolean; reason: string } | null>(null);
   const [activeRunId, setActiveRunId] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [taskReceipts, setTaskReceipts] = useState<Array<{ serviceId: string; transactionId: string; explorerUrl: string; amountHbar: string }>>([]);
+  const [taskWarnings, setTaskWarnings] = useState<string[]>([]);
   const [visibleAnchorCount, setVisibleAnchorCount] = useState(7);
   const [visibleRecordCount, setVisibleRecordCount] = useState(10);
 
@@ -152,7 +154,7 @@ export default function App() {
     finally { setCancelBusy(false); }
   }
   async function runAgent() {
-    setBusy("agent"); setError(""); setNotice("");
+    setBusy("agent"); setError(""); setNotice(""); setTaskReceipts([]); setTaskWarnings([]);
     try {
       if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect your wallet on Hedera Testnet and confirm consent before continuing.");
       if (agentMode === "preview") throw new Error("Preview mode never pays. Use the preview control to inspect quotes.");
@@ -181,10 +183,12 @@ export default function App() {
       const runId = crypto.randomUUID();
       setActiveRunId(runId);
       const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers, body: JSON.stringify({ runId, goal, budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
-      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string }>; expenditure?: { reservedHbar?: string; paidCalls?: number }; warnings?: string[]; note?: string };
+      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string; amountHbar?: string }>; expenditure?: { reservedHbar?: string; paidCalls?: number }; warnings?: string[]; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
       setNotice(`Agent ${result.status ?? "completed"}: ${result.receipts?.length ?? 1} payment(s), ${result.expenditure?.reservedHbar ?? result.selection?.amountHbar ?? "quoted price"} HBAR total. ${result.warnings?.join(" ") ?? ""} Review each transaction receipt and audit history.`);
+      setTaskReceipts((result.receipts ?? []).flatMap(receipt => receipt.transactionId && receipt.explorerUrl ? [{ serviceId: receipt.serviceId ?? "approved service", transactionId: receipt.transactionId, explorerUrl: receipt.explorerUrl, amountHbar: receipt.amountHbar ?? "unknown" }] : []));
+      setTaskWarnings(result.warnings ?? []);
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); await refresh(); }
     finally { setBusy(""); setActiveRunId(""); }
@@ -217,6 +221,7 @@ export default function App() {
     </section>
     {error && <div className="dash-alert error-alert" role="alert">{error}</div>}
     {notice && <div className="dash-alert success-alert" role="status">{notice}</div>}
+    {taskReceipts.length > 0 && <section className="panel wide-panel task-receipts" aria-label="Latest task receipts"><div className="panel-head"><div><p className="dash-kicker">LATEST TASK</p><h2>Payment receipts</h2></div><span className="chip good-chip">{taskReceipts.length} SETTLED</span></div><div className="limit-list">{taskReceipts.map((receipt, index) => <div key={receipt.transactionId}><span>{receipt.serviceId} · {receipt.amountHbar} HBAR</span><strong><a href={receipt.explorerUrl} target="_blank" rel="noreferrer">HashScan receipt #{index + 1} ↗</a></strong></div>)}</div>{taskWarnings.length > 0 && <div className="verify-result invalid" role="status"><strong>Task stopped with warnings</strong><span>{taskWarnings.join(" ")}</span></div>}</section>}
     <section className="metric-grid" aria-label="Live system status">
       <article className="metric"><span>NETWORK</span><strong>{data.x402?.network ?? "—"}</strong><small>{data.x402?.sdkConfigured ? "Payer configuration detected" : "Payer not configured"}</small></article>
       <article className="metric"><span>AGENT</span><strong className={data.agentV2?.killSwitchEnabled ? "text-danger" : data.agent?.enabled ? "text-good" : "text-warn"}>{data.agentV2?.killSwitchEnabled ? "Kill switch ON" : data.agent?.enabled ? "Enabled" : "Disabled"}</strong><small>{data.agentV2?.killSwitchEnabled ? "Payments stopped by server policy" : "Disabled by default · local testnet only"}</small></article>
