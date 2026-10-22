@@ -9,6 +9,7 @@ export type DurableReservation = {
   amountTinybars: number;
   receiverAccountId: string;
   resourceUrl: string;
+  taskId?: string;
   status: ReservationStatus;
   transactionId?: string;
   createdAt: string;
@@ -72,7 +73,7 @@ async function persist(path: string, ledger: Ledger) {
 
 export async function reserveDurableSpend(input: {
   amountTinybars: number; receiverAccountId: string; resourceUrl: string;
-}, options: { path?: string; now?: Date; dailyBudgetTinybars: number; maxAttemptsPerDay: number }) {
+}, options: { path?: string; now?: Date; dailyBudgetTinybars: number; maxAttemptsPerDay: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number }) {
   const path = pathFor(options.path);
   const now = options.now ?? new Date();
   const day = dayOf(now);
@@ -81,9 +82,14 @@ export async function reserveDurableSpend(input: {
     const today = ledger.entries.find(e => e.day === day) ?? { day, reservedTinybars: 0, attempts: 0, updatedAt: now.toISOString() };
     if (today.attempts >= options.maxAttemptsPerDay) return { allowed: false as const, reason: "Daily payment-attempt limit reached." };
     if (today.reservedTinybars + input.amountTinybars > options.dailyBudgetTinybars) return { allowed: false as const, reason: "Daily spending budget would be exceeded." };
+    const taskReservations = options.taskId ? ledger.reservations.filter(r => r.taskId === options.taskId && r.status !== "failed") : [];
+    const taskSpent = taskReservations.reduce((sum, r) => sum + r.amountTinybars, 0);
+    if (options.taskBudgetTinybars !== undefined && taskSpent + input.amountTinybars > options.taskBudgetTinybars) return { allowed: false as const, reason: "Task spending budget would be exceeded." };
+    if (options.maxPaidCallsPerTask !== undefined && taskReservations.length >= options.maxPaidCallsPerTask) return { allowed: false as const, reason: "Per-task paid-call limit reached." };
     const reservation: DurableReservation = {
       id: randomUUID(), day, amountTinybars: input.amountTinybars,
       receiverAccountId: input.receiverAccountId, resourceUrl: input.resourceUrl,
+      ...(options.taskId ? { taskId: options.taskId } : {}),
       status: "reserved", createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     today.reservedTinybars += input.amountTinybars;
