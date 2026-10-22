@@ -52,7 +52,7 @@ async function importLegacyJsonLedger(): Promise<void> {
   if (![1,2].includes(Number(ledger.version)) || !Array.isArray(ledger.entries) || (ledger.version === 2 && !Array.isArray(ledger.reservations))) {
     throw new Error("Legacy spending ledger has an unsupported schema; database cutover is blocked.");
   }
-  for (const entry of ledger.entries) {
+  for (const entry of ledger.entries ?? []) {
     if (!entry || !/^\d{4}-\d{2}-\d{2}$/.test(entry.day) ||
         !Number.isSafeInteger(entry.reservedTinybars) || entry.reservedTinybars < 0 ||
         !Number.isSafeInteger(entry.attempts) || entry.attempts < 0) {
@@ -96,7 +96,7 @@ async function importLegacyJsonLedger(): Promise<void> {
         importedByDay.set(item.day, entry);
       }
     }
-    for (const entry of ledger.entries) {
+    for (const entry of ledger.entries ?? []) {
       const imported = importedByDay.get(entry.day) ?? { reserved: 0, attempts: 0 };
       const extraReserved = Math.max(0, entry.reservedTinybars - imported.reserved);
       const extraAttempts = Math.max(0, entry.attempts - imported.attempts);
