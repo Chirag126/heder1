@@ -164,6 +164,52 @@ test("Phase 10 cancellation rejects unknown run IDs", async () => {
   assert.equal(response.json().cancelled, false);
 });
 
+
+test("Phase 11 policy simulation rejects over-cap quotes without invoking payment", async () => {
+  const policy = {
+    mode: "autonomous",
+    network: "hedera:testnet",
+    maxPaymentTinybars: 40_000,
+    taskBudgetTinybars: 100_000,
+    dailyBudgetTinybars: 200_000,
+    maxPaidCallsPerTask: 1,
+    maxPaidCallsPerDay: 2,
+    allowedServiceIds: ["heder1-short-summary"],
+    allowedAssets: ["0.0.0"],
+    expiresAt: Date.now() + 60_000,
+    approvalThresholdTinybars: 20_000,
+  };
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/agent/v2/policy/simulate",
+    payload: { policy, quote: { serviceId: "heder1-short-summary", network: "hedera:testnet", asset: "0.0.0", amountTinybars: 50_000 } },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().allowed, false);
+  assert.match(response.json().reason, /per-payment cap/);
+});
+
+test("Phase 11 policy simulation refuses mainnet and unapproved service targets", async () => {
+  const policy = {
+    mode: "autonomous",
+    network: "hedera:testnet",
+    maxPaymentTinybars: 100_000,
+    taskBudgetTinybars: 500_000,
+    dailyBudgetTinybars: 1_000_000,
+    maxPaidCallsPerTask: 1,
+    maxPaidCallsPerDay: 10,
+    allowedServiceIds: ["heder1-short-summary"],
+    allowedAssets: ["0.0.0"],
+    expiresAt: Date.now() + 60_000,
+    approvalThresholdTinybars: 50_000,
+  };
+  const mainnet = await app.inject({ method: "POST", url: "/api/agent/v2/policy/simulate", payload: { policy, quote: { serviceId: "heder1-short-summary", network: "hedera:mainnet", asset: "0.0.0", amountTinybars: 1 } } });
+  assert.equal(mainnet.json().allowed, false);
+  const unapproved = await app.inject({ method: "POST", url: "/api/agent/v2/policy/simulate", payload: { policy, quote: { serviceId: "https://evil.example", network: "hedera:testnet", asset: "0.0.0", amountTinybars: 1 } } });
+  assert.equal(unapproved.json().allowed, false);
+  assert.match(unapproved.json().reason, /allowlist/);
+});
+
 test("direct demo payment stays disabled without explicit opt-in", async () => {
   const response = await app.inject({
     method: "POST",

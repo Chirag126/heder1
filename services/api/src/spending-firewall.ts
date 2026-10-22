@@ -143,10 +143,10 @@ export async function reserveAgentSpend(
  */
 export async function reserveAgentV2Spend(
   input: { amountTinybars: string; receiverAccountId: string; resourceUrl: string },
-  options: { path?: string; now?: Date } = {},
+  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number } = {},
 ): Promise<FirewallReservation> {
   const amount = Number(input.amountTinybars);
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > FIREWALL_MAX_PAYMENT_TINYBARS) {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > Math.min(FIREWALL_MAX_PAYMENT_TINYBARS, options.maxPaymentTinybars ?? FIREWALL_MAX_PAYMENT_TINYBARS)) {
     return { allowed: false, reason: "Phase 10 payment exceeds the per-payment spending firewall limit." };
   }
   let target: URL;
@@ -172,8 +172,8 @@ export async function reserveAgentV2Spend(
     const today = ledger.entries.find((entry) => entry.day === day) ?? {
       day, reservedTinybars: 0, attempts: 0, updatedAt: now.toISOString(),
     };
-    if (today.attempts >= FIREWALL_MAX_ATTEMPTS_PER_DAY) return { allowed: false, reason: "Daily payment-attempt limit reached." };
-    if (today.reservedTinybars + amount > FIREWALL_DAILY_BUDGET_TINYBARS) return { allowed: false, reason: "Daily spending budget would be exceeded." };
+    if (today.attempts >= Math.min(FIREWALL_MAX_ATTEMPTS_PER_DAY, options.maxAttemptsPerDay ?? FIREWALL_MAX_ATTEMPTS_PER_DAY)) return { allowed: false, reason: "Daily payment-attempt limit reached." };
+    if (today.reservedTinybars + amount > Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS)) return { allowed: false, reason: "Daily spending budget would be exceeded." };
     today.reservedTinybars += amount;
     today.attempts += 1;
     today.updatedAt = now.toISOString();
@@ -189,7 +189,7 @@ export async function reserveAgentV2Spend(
       amountTinybars: String(amount),
       reservedTodayTinybars: String(today.reservedTinybars),
       attemptsToday: today.attempts,
-      dailyBudgetTinybars: String(FIREWALL_DAILY_BUDGET_TINYBARS),
+      dailyBudgetTinybars: String(Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS)),
     };
   } finally {
     release();

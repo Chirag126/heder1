@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { getAddress, verifyMessage } from "ethers";
+import { DEFAULT_USER_SPENDING_POLICY, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
 
 export const AUTHORIZATION_TTL_MS = 2 * 60 * 1000;
 export const AUTHORIZATION_CHAIN_ID = 296;
@@ -7,8 +8,8 @@ export const AUTHORIZATION_SCOPE = "heder1:agent-run:single-payment";
 export const AUTHORIZATION_SCOPE_V2 = "heder1:agent-v2:bounded-task";
 type AuthorizationScope = typeof AUTHORIZATION_SCOPE | typeof AUTHORIZATION_SCOPE_V2;
 
-type Challenge = { account: string; nonce: string; expiresAt: number; message: string; scope: AuthorizationScope };
-type Grant = { account: string; expiresAt: number; scope: AuthorizationScope };
+type Challenge = { account: string; nonce: string; expiresAt: number; message: string; scope: AuthorizationScope; policy: UserSpendingPolicy };
+type Grant = { account: string; expiresAt: number; scope: AuthorizationScope; policy: UserSpendingPolicy };
 
 const challenges = new Map<string, Challenge>();
 const grants = new Map<string, Grant>();
@@ -22,6 +23,7 @@ export function createAuthorizationChallenge(
   accountInput: string,
   now = Date.now(),
   requestedScope: string = AUTHORIZATION_SCOPE,
+  requestedPolicy?: UserSpendingPolicy,
 ) {
   prune(now);
   let account: string;
@@ -31,8 +33,11 @@ export function createAuthorizationChallenge(
     throw new Error("Requested authorization scope is not supported.");
   }
   const scope = requestedScope as AuthorizationScope;
-  const nonce = randomBytes(32).toString("hex");
   const expiresAt = now + AUTHORIZATION_TTL_MS;
+  const policy: UserSpendingPolicy = { ...DEFAULT_USER_SPENDING_POLICY, ...requestedPolicy, expiresAt: Math.min(requestedPolicy?.expiresAt ?? expiresAt, expiresAt) };
+  const policyErrors = validateUserSpendingPolicy(policy);
+  if (policyErrors.length) throw new Error(policyErrors.join(" "));
+  const nonce = randomBytes(32).toString("hex");
   const phaseTwo = scope === AUTHORIZATION_SCOPE_V2;
   const message = [
     phaseTwo ? "heder1 bounded autonomous agent v2 authorization" : "heder1 one-time payment authorization",
@@ -47,9 +52,10 @@ export function createAuthorizationChallenge(
     `Nonce: ${nonce}`,
     `Issued at: ${new Date(now).toISOString()}`,
     `Expires at: ${new Date(expiresAt).toISOString()}`,
+    `User spending policy: ${JSON.stringify(policy)}`,
     "This approval authorizes one agent invocation only. It does not grant private-key access.",
   ].filter(Boolean).join("\n");
-  challenges.set(nonce, { account, nonce, expiresAt, message, scope });
+  challenges.set(nonce, { account, nonce, expiresAt, message, scope, policy });
   return { nonce, message, expiresAt: new Date(expiresAt).toISOString(), chainId: AUTHORIZATION_CHAIN_ID, scope };
 }
 
@@ -64,8 +70,8 @@ export async function verifyAuthorizationChallenge(input: { nonce: string; signa
   catch { throw new Error("Wallet signature is invalid."); }
   if (recovered !== challenge.account) throw new Error("Wallet signature does not match the challenged account.");
   const token = randomBytes(32).toString("base64url");
-  grants.set(token, { account: challenge.account, expiresAt: now + AUTHORIZATION_TTL_MS, scope: challenge.scope });
-  return { authorizationToken: token, account: challenge.account, scope: challenge.scope, expiresAt: new Date(now + AUTHORIZATION_TTL_MS).toISOString(), singleUse: true };
+  grants.set(token, { account: challenge.account, expiresAt: Math.min(now + AUTHORIZATION_TTL_MS, challenge.expiresAt), scope: challenge.scope, policy: challenge.policy });
+  return { authorizationToken: token, account: challenge.account, scope: challenge.scope, policy: challenge.policy, expiresAt: new Date(Math.min(now + AUTHORIZATION_TTL_MS, challenge.expiresAt)).toISOString(), singleUse: true };
 }
 
 /** The caller must specify the scope it intends to consume; scopes cannot cross endpoints. */
@@ -86,5 +92,12 @@ export function consumeAuthorizationGrant(
     return { allowed: false as const, reason: "Authorization expired or scope is invalid for this endpoint." };
   }
   grants.delete(token);
-  return { allowed: true as const, account: grant.account, scope: grant.scope };
+  return { allowed: true as const, account: grant.account, scope: grant.scope, policy: grant.policy };
+}
+
+/** Revoke an unconsumed single-use grant. Consumed grants are no longer reusable; active runs use the cancellation endpoint. */
+export function revokeAuthorizationGrant(token: string | undefined) {
+  if (!token) return { revoked: false as const, reason: "Authorization token is required." };
+  const revoked = grants.delete(token);
+  return revoked ? { revoked: true as const } : { revoked: false as const, reason: "Grant is invalid, expired, already consumed, or already revoked." };
 }

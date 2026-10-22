@@ -5,9 +5,10 @@ import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js"
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
-import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
+import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
 
 export const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -82,11 +83,11 @@ app.get("/api/x402/summary", handleShortSummaryResource);
 
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
-app.post<{ Body: { account?: string; chainId?: number; scope?: string } }>("/api/authorization/challenge", async (request, reply) => {
+app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: UserSpendingPolicy } }>("/api/authorization/challenge", async (request, reply) => {
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
-    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope);
+    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope, request.body.policy);
     await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { account: request.body.account, chainId: 296, nonce: challenge.nonce, expiresAt: challenge.expiresAt } });
     return challenge;
   } catch (error) {
@@ -108,6 +109,14 @@ app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/v
     await appendAuditEvent({ event: "authorization.rejected", outcome: "rejected", details: { stage: "signature-verification", reason: error instanceof Error ? error.message : "Wallet authorization failed." } });
     return reply.code(401).send({ error: error instanceof Error ? error.message : "Wallet authorization failed." });
   }
+});
+
+/** Revoke a short-lived grant that has not yet been consumed. Never log the token. */
+app.post<{ Body: { authorizationToken?: string } }>("/api/authorization/revoke", async (request, reply) => {
+  const result = revokeAuthorizationGrant(request.body?.authorizationToken);
+  if (!result.revoked) return reply.code(404).send(result);
+  await appendAuditEvent({ event: "authorization.rejected", outcome: "accepted", details: { action: "grant_revoked", revoked: true } });
+  return { revoked: true };
 });
 
 /** Local audit integrity summary; does not expose payment proofs or wallet signatures. */
@@ -182,6 +191,51 @@ app.get("/api/agent/status", async () => ({
 const agentV2Runs = new Map<string, AbortController>();
 const agentV2CompletedRuns = new Set<string>();
 
+app.get("/api/agent/v2/policy", async () => ({
+  killSwitchEnabled: process.env.HEDERA_AGENT_KILL_SWITCH === "true",
+  policy: { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 },
+  hardCeilings: { maxPaymentTinybars: 100_000, taskBudgetTinybars: 500_000, dailyBudgetTinybars: 1_000_000, maxPaidCallsPerTask: 3, maxPaidCallsPerDay: 10 },
+  supportedModes: ["preview", "autonomous", "approval-required"],
+  network: "hedera:testnet",
+  mainnetEnabled: false,
+}));
+
+type PolicySimulationBody = {
+  policy?: UserSpendingPolicy;
+  quote?: {
+    serviceId?: string;
+    network?: string;
+    asset?: string;
+    amountTinybars?: number;
+    taskSpentTinybars?: number;
+    dailyReservedTinybars?: number;
+    paidCallsThisTask?: number;
+    paidCallsToday?: number;
+    now?: number;
+  };
+};
+
+app.post<{ Body: PolicySimulationBody }>("/api/agent/v2/policy/simulate", async (request, reply) => {
+  const policy = request.body?.policy;
+  const quote = request.body?.quote;
+  if (!policy || !quote || typeof quote.serviceId !== "string" || typeof quote.network !== "string" || typeof quote.asset !== "string" || typeof quote.amountTinybars !== "number") {
+    return reply.code(400).send({ allowed: false, reason: "A complete policy and quote (serviceId, network, asset, amountTinybars) are required." });
+  }
+  const errors = validateUserSpendingPolicy(policy);
+  if (errors.length) return reply.code(400).send({ allowed: false, reason: errors.join(" ") });
+  return simulateSpendingPolicy(policy, {
+    serviceId: quote.serviceId,
+    network: quote.network,
+    asset: quote.asset,
+    amountTinybars: quote.amountTinybars,
+    taskSpentTinybars: quote.taskSpentTinybars,
+    dailyReservedTinybars: quote.dailyReservedTinybars,
+    paidCallsThisTask: quote.paidCallsThisTask,
+    paidCallsToday: quote.paidCallsToday,
+    now: quote.now,
+  });
+});
+
 app.get("/api/agent/v2/status", async () => ({
   enabled: isAgentV2Enabled(),
   policy: agentV2Policy,
@@ -226,7 +280,7 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   agentV2Runs.set(runId, controller);
   try {
     await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
-    const result = await runAgentV2Task(input, { signal: controller.signal, runId });
+    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId });
     await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "10", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
     return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {

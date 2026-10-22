@@ -28,6 +28,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 9: settlement receipt validation](#phase-9-settlement-receipt-validation)
 - [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
 - [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
+- [Phase 11: user-defined spending policy](docs/PHASE-11.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
 - [Official references](#official-references)
@@ -44,6 +45,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
 - **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
+- **Phase 11 policy foundation:** wallet-signed user spending limits, quote simulation with clear rejection reasons, approved service and asset allowlists, short expiry, unused-grant revocation, and a server-side emergency kill switch. See [Phase 11 documentation](docs/PHASE-11.md) for supported behavior and remaining limitations.
 
 ## Architecture
 
@@ -465,7 +467,7 @@ The Blueprint sets the network to Hedera Testnet and keeps payment execution and
 - Confirm wallet authorization can only issue a grant; agent execution remains disabled in production.
 - Do not perform a live payment as part of the deployment smoke test.
 
-## Validation and testing
+## Phase 11: user-defined spending policy\n\nPhase 11 extends the existing firewall and wallet authorization with a policy object bound to the wallet-signed challenge, a no-payment quote simulation endpoint, signed per-payment/task/daily caps, service and native-HBAR allowlists, grant revocation, and a server-side emergency kill switch. The approval-required runner mode fails closed until an explicit approval-and-resume workflow is implemented. Mainnet remains disabled. See [docs/PHASE-11.md](docs/PHASE-11.md).\n\n## Validation and testing
 
 Install dependencies first, then run the repository checks:
 
