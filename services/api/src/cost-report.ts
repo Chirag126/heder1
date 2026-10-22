@@ -52,6 +52,7 @@ export function getPublicPricing() {
       "Provider resource price is separate from Heder1 service fees.",
       "For the Hedera x402 exact flow, the facilitator sponsors the settlement network fee; this does not pay the resource price or hosting/model costs.",
       "Hosting and infrastructure costs are not currently allocated per task and are not represented as zero-dollar costs.",
+      "Optional HCS audit anchoring is a separate operation; when enabled, its operator/network cost is not included in the x402 resource-payment total.",
       "The actual HTTP 402 quote is authoritative; registry price hints are estimates only.",
     ],
   };
@@ -128,7 +129,8 @@ export function reportActualTaskCost(receipts: ReadonlyArray<{ amountTinybars: s
     hederaNetworkFee: { userPayableTinybars: "0", paidBy: "x402 facilitator", status: "sponsored for supported x402 settlement only" },
     modelInference: { actualUsd: "0", calls: 0, reason: "No LLM inference was called by this task." },
     hostingInfrastructure: { allocatedUsd: null, status: "Not allocated per task; hosting is not free." },
+    otherNetworkOperations: { hcsAuditAnchoring: process.env.HEDERA_AUDIT_HCS_ENABLED === "true" ? "enabled; operator costs are separate and not allocated per task" : "disabled by default" },
     knownUserCost: { amountTinybars: total.toString(), amountHbar: toHbar(total) },
-    unknownOrUnallocatedCosts: ["hosting", "database", "monitoring", "future model inference if enabled"],
+    unknownOrUnallocatedCosts: ["hosting", "database", "monitoring", "HCS audit anchoring if enabled", "future model inference if enabled"],
   };
 }
