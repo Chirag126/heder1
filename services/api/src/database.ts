@@ -1,10 +1,28 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import pg, { type PoolClient } from "pg";
+import { createRequire } from "node:module";
 
-const { Pool } = pg;
-let pool: InstanceType<typeof Pool> | undefined;
+// PostgreSQL is only needed when DATABASE_URL is configured. Loading the driver
+// lazily lets local JSON-mode tests run even before optional database packages
+// have been installed, while database-backed operations still fail closed.
+const require = createRequire(import.meta.url);
+
+interface QueryResult {
+  rowCount: number | null;
+  rows: any[];
+}
+interface PgClient {
+  query(text: string, values?: any[]): Promise<QueryResult>;
+  release(): void;
+}
+interface PgPool {
+  connect(): Promise<PgClient>;
+  query(text: string, values?: any[]): Promise<QueryResult>;
+  on(event: "error", listener: (error: Error) => void): this;
+  end(): Promise<void>;
+}
+let pool: PgPool | undefined;
 let readyPromise: Promise<boolean> | undefined;
 
 export function databaseConfigured(): boolean {
@@ -15,6 +33,12 @@ export function databaseConfigured(): boolean {
 export function getDatabasePool() {
   if (!databaseConfigured()) return undefined;
   if (!pool) {
+    let Pool: new (options: Record<string, unknown>) => PgPool;
+    try {
+      ({ Pool } = require("pg") as { Pool: new (options: Record<string, unknown>) => PgPool });
+    } catch {
+      throw new Error("The PostgreSQL driver is missing. Run 'pnpm install' from the repository root before enabling DATABASE_URL.");
+    }
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       max: Number(process.env.HEDER1_DB_POOL_MAX ?? 10),
@@ -81,7 +105,7 @@ async function findMigrationDirectory(): Promise<string> {
   throw new Error("Database migrations directory is missing; refusing to start database-backed payment operations.");
 }
 
-export async function withDatabaseTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withDatabaseTransaction<T>(work: (client: PgClient) => Promise<T>): Promise<T> {
   if (!await ensureDatabaseReady()) throw new Error("A configured PostgreSQL database is required for this operation.");
   const db = getDatabasePool();
   if (!db) throw new Error("PostgreSQL is not configured.");
