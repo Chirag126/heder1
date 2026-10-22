@@ -242,6 +242,22 @@ export async function consumeRateLimit(key: string, limit: number, windowMs: num
 }
 const localRateLimits = new Map<string, { startedAt: number; count: number }>();
 
+
+export async function storeAuditMetadata(input: { walletAddress?: string; eventType: string; entityId?: string; metadata?: Record<string, unknown> }): Promise<void> {
+  if (!databaseConfigured()) return;
+  await ensureDatabaseReady();
+  const db = getDatabasePool()!;
+  const wallet = input.walletAddress ? input.walletAddress.toLowerCase() : null;
+  if (wallet) await ensureUser(wallet);
+  const safeMetadata = Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) =>
+    !/(nonce|signature|token|private.?key|seed|proof|secret|credential|password|api.?key|authorization|cookie|mnemonic)/i.test(key)
+  ));
+  await db.query(
+    "INSERT INTO audit_metadata(wallet_address,event_type,entity_id,metadata) VALUES($1,$2,$3,$4::jsonb)",
+    [wallet, input.eventType.slice(0,120), input.entityId?.slice(0,200) ?? null, JSON.stringify(safeMetadata)],
+  );
+}
+
 export async function closeDatabasePool(): Promise<void> {
   if (pool) await pool.end();
   pool = undefined;
