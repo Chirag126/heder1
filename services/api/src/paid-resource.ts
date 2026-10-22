@@ -95,7 +95,7 @@ async function settleOnce(key: string, paymentPayload: JsonRecord, requirements:
       body,
       signal: AbortSignal.timeout(30_000),
     };
-    const verifyResponse = await fetch(`${baseUrl}/verify`, options);
+    const verifyResponse = await fetch(`${baseUrl}/verify`, { ...options, redirect: "error" });
     const verification = await readFacilitatorJson(verifyResponse, "Facilitator verification");
     if (verification.isValid !== true) {
       const reason = typeof verification.invalidReason === "string" ? verification.invalidReason : "Facilitator rejected the payment proof.";
@@ -106,7 +106,7 @@ async function settleOnce(key: string, paymentPayload: JsonRecord, requirements:
       throw new Error(reason);
     }
 
-    const settleResponse = await fetch(`${baseUrl}/settle`, options);
+    const settleResponse = await fetch(`${baseUrl}/settle`, { ...options, redirect: "error" });
     const settlement = await readFacilitatorJson(settleResponse, "Facilitator settlement");
     if (settlement.success !== true || typeof settlement.transaction !== "string" || !settlement.transaction) {
       throw new Error(typeof settlement.errorReason === "string" ? settlement.errorReason : "Facilitator did not confirm settlement with a transaction ID.");
@@ -156,7 +156,7 @@ function makeHandler(service: ServiceDefinition) {
     const baseUrl = config.facilitatorUrl.replace(/\/+$/, "");
     let supported: JsonRecord;
     try {
-      supported = await readFacilitatorJson(await fetch(`${baseUrl}/supported`, { signal: AbortSignal.timeout(10_000) }), "Facilitator capabilities");
+      supported = await readFacilitatorJson(await fetch(`${baseUrl}/supported`, { signal: AbortSignal.timeout(10_000), redirect: "error" }), "Facilitator capabilities");
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "Facilitator unavailable." });
     }
