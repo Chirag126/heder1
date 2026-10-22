@@ -87,7 +87,7 @@ export function isAgentEnabled(): boolean {
  * resource, evaluates it against a strict allowlist, then lets x402 handle the
  * 402 challenge/retry. The x402 client's policy is the final spending boundary.
  */
-export async function runPaymentAgent() {
+export async function runPaymentAgent(accountId?: string) {
   if (!isAgentEnabled()) {
     throw new Error("Agent is disabled. Set HEDERA_AGENT_ENABLED=true for local Hedera testnet development only.");
   }
@@ -105,7 +105,7 @@ export async function runPaymentAgent() {
     amountTinybars: decision.maxAmountTinybars,
     receiverAccountId: config.receiverAccountId,
     resourceUrl: decision.url,
-  });
+  }, { accountId });
   if (!reservation.allowed) throw new Error(reservation.reason);
 
   const signer = createClientHederaSigner(
