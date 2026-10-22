@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
@@ -12,8 +12,21 @@ import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationC
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
+import { claimTaskRun, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
 
-export const app = Fastify({ logger: true, bodyLimit: 16_384 });
+export const app = Fastify({
+  logger: {
+    redact: {
+      paths: [
+        "req.headers.authorization", "req.headers.cookie",
+        "req.headers.x-heder1-authorization", "req.headers.x-heder1-payment-approval",
+        "req.headers.x-heder1-reconciliation-token", "req.headers.payment-signature",
+      ],
+      censor: "[REDACTED]",
+    },
+  },
+  bodyLimit: 16_384,
+});
 const port = Number(process.env.PORT ?? 4000);
 // Public hosts must bind to all interfaces; local payment testing stays loopback-only.
 const host = process.env.HOST ?? (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
@@ -41,6 +54,38 @@ app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Max-Age", "600");
   }
   if (request.method === "OPTIONS") return reply.code(204).send();
+});
+
+const localRateBuckets = new Map<string, { start: number; count: number }>();
+app.addHook("onRequest", async (request, reply) => {
+  if (request.method === "OPTIONS" || request.url.startsWith("/api/health")) return;
+  const path = request.url.split("?")[0] ?? "/";
+  const sensitive = path.startsWith("/api/authorization/") || path.startsWith("/api/agent/v2/approval/");
+  const limit = sensitive ? 10 : request.method === "POST" ? 30 : 120;
+  const windowMs = 60_000;
+  const key = `${request.ip}:${path}`;
+  try {
+    let result: { allowed: boolean; remaining: number; retryAfterSeconds: number };
+    if (databaseConfigured()) {
+      result = await consumeRateLimit(key, limit, windowMs);
+    } else {
+      const now = Date.now();
+      const current = localRateBuckets.get(key);
+      const bucket = !current || now - current.start >= windowMs ? { start: now, count: 0 } : current;
+      bucket.count += 1;
+      localRateBuckets.set(key, bucket);
+      result = { allowed: bucket.count <= limit, remaining: Math.max(0, limit - bucket.count), retryAfterSeconds: Math.max(1, Math.ceil((bucket.start + windowMs - now) / 1000)) };
+    }
+    reply.header("X-RateLimit-Limit", String(limit));
+    reply.header("X-RateLimit-Remaining", String(result.remaining));
+    if (!result.allowed) {
+      reply.header("Retry-After", String(result.retryAfterSeconds));
+      return reply.code(429).send({ error: "API rate limit exceeded. Retry after the indicated delay." });
+    }
+  } catch {
+    // If shared rate-limit storage is configured but unavailable, fail closed.
+    if (databaseConfigured()) return reply.code(503).send({ error: "Shared API rate limiter is unavailable; request blocked." });
+  }
 });
 
 app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-paid-resource" }));
@@ -90,7 +135,7 @@ app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: 
   if (request.body?.chainId !== 296) return reply.code(400).send({ error: "Hedera Testnet (chain ID 296) is required." });
   if (typeof request.body?.account !== "string") return reply.code(400).send({ error: "Wallet account is required." });
   try {
-    const challenge = createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope, request.body.policy);
+    const challenge = await createAuthorizationChallenge(request.body.account, Date.now(), request.body.scope, request.body.policy);
     await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { account: request.body.account, chainId: 296, nonce: challenge.nonce, expiresAt: challenge.expiresAt } });
     return challenge;
   } catch (error) {
@@ -116,7 +161,7 @@ app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/v
 
 /** Revoke a short-lived grant that has not yet been consumed. Never log the token. */
 app.post<{ Body: { authorizationToken?: string } }>("/api/authorization/revoke", async (request, reply) => {
-  const result = revokeAuthorizationGrant(request.body?.authorizationToken);
+  const result = await revokeAuthorizationGrant(request.body?.authorizationToken);
   if (!result.revoked) return reply.code(404).send(result);
   await appendAuditEvent({ event: "authorization.rejected", outcome: "accepted", details: { action: "grant_revoked", revoked: true } });
   return { revoked: true };
@@ -286,7 +331,7 @@ app.post<{ Body: PaymentApprovalChallengeBody }>("/api/agent/v2/approval/challen
     return reply.code(400).send({ error: "account, policy, and exact quote fields are required." });
   }
   try {
-    const challenge = createPaymentApprovalChallenge({
+    const challenge = await createPaymentApprovalChallenge({
       account: body.account,
       policy: body.policy,
       quote: { serviceId: q.serviceId, network: q.network, asset: q.asset, amountTinybars: q.amountTinybars, receiverAccountId: q.receiverAccountId },
@@ -362,31 +407,38 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   const token = request.headers["x-heder1-authorization"];
   const approvalHeader = request.headers["x-heder1-payment-approval"];
   let approvedQuote: ApprovedPaymentQuote | undefined;
-  let authorization: ReturnType<typeof consumeAuthorizationGrant>;
+  let authorization: Awaited<ReturnType<typeof consumeAuthorizationGrant>>;
   if (typeof approvalHeader === "string") {
-    const approved = consumePaymentApproval(approvalHeader);
+    const approved = await consumePaymentApproval(approvalHeader);
     if (!approved.allowed) authorization = approved;
     else {
       approvedQuote = approved.quote;
       authorization = { allowed: true, account: approved.account, scope: AUTHORIZATION_SCOPE_V2, policy: approved.policy };
     }
   } else {
-    authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
+    authorization = await consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
   }
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization or quote-specific payment approval first." });
   }
+  const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  const claimed = await claimTaskRun({ runId, walletAddress: authorization.account, idempotencyKey: runId, requestHash });
+  if (!claimed) return reply.code(409).send({ error: "This task/run ID or idempotency key has already been used." });
   const controller = new AbortController();
   agentV2Runs.set(runId, controller);
   try {
-    await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
-    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId, approvedQuote });
-    await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "10", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
+    await updateTaskRun(runId, authorization.account, "reserved");
+    await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "12", runId, account: authorization.account, scope: authorization.scope } });
+    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId, approvedQuote, accountId: authorization.account });
+    const taskStatus = result.warnings?.length ? "unknown" : "settled";
+    await updateTaskRun(runId, authorization.account, taskStatus, { paidCalls: result.expenditure.paidCalls, receipts: result.receipts.map(receipt => ({ serviceId: receipt.serviceId, transactionId: receipt.transactionId, amountTinybars: receipt.amountTinybars })), warnings: result.warnings ?? [] });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "12", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
     return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Agent v2 task failed.";
-    await appendAuditEvent({ event: "agent.run_finished", outcome: "failed", details: { phase: "10", runId, account: authorization.account, error: reason } });
+    try { await updateTaskRun(runId, authorization.account, "unknown", undefined, "payment_outcome_requires_reconciliation"); } catch { /* preserve original response; durable state remains fail-closed */ }
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "failed", details: { phase: "12", runId, account: authorization.account, error: reason } });
     const status = /No approved service|No registered service|budgetTinybars|maximum|allowlist|No advertised/i.test(reason) ? 422 : 502;
     return reply.code(status).send({ runId, agent: "heder1-autonomous-agent-v2", status: "stopped-safely", error: reason, paymentAttempted: /No approved service|No registered service|No advertised/i.test(reason) ? false : undefined });
   } finally {
@@ -417,7 +469,7 @@ app.post("/api/agent/run", async (request, reply) => {
     });
   }
   const token = request.headers["x-heder1-authorization"];
-  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
+  const authorization = await consumeAuthorizationGrant(typeof token === "string" ? token : undefined);
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Connect a Hedera Testnet wallet and approve one agent invocation in the dashboard." });
