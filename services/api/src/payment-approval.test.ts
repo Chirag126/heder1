@@ -49,5 +49,6 @@ test("approval rejects unapproved services, expired policies, preview mode, and 
     account: wallet.address, policy: policy(),
     quote: { serviceId: "heder1-short-summary", network: "hedera:testnet", asset: "0.0.0", amountTinybars: 1, receiverAccountId: "0.0.1" },
   });
-  await assert.rejects(() => verifyPaymentApproval({ nonce: challenge.nonce, signature: await wallet.signMessage("wrong message") }), /does not match|invalid/);
+  const wrongSignature = await wallet.signMessage("wrong message");
+  await assert.rejects(() => verifyPaymentApproval({ nonce: challenge.nonce, signature: wrongSignature }), /does not match|invalid/);
 });
