@@ -270,8 +270,8 @@ test("reservation reconciliation routes require operator token and preserve ambi
   try {
     const reserved = await reserveDurableSpend({
       amountTinybars: 50000, receiverAccountId: "0.0.11044329",
-      resourceUrl: "http://127.0.0.1:4000/api/x402/summary", taskId: "route-test",
-    }, { path: ledgerPath, dailyBudgetTinybars: 100000, maxAttemptsPerDay: 10 });
+      resourceUrl: "http://127.0.0.1:4000/api/x402/summary",
+    }, { path: ledgerPath, dailyBudgetTinybars: 100000, maxAttemptsPerDay: 10, taskId: "route-test" });
     assert.equal(reserved.allowed, true);
     if (!reserved.allowed) return;
     const denied = await app.inject({ method: "GET", url: "/api/agent/v2/reservations" });
