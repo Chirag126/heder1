@@ -4,7 +4,7 @@ import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
-import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
+import { isAgentV2Enabled, previewAgentV2Plan, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 import { listDurableReservations, reconcileDurableReservation } from "./spending-ledger.js";
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
@@ -259,6 +259,16 @@ app.get("/api/agent/v2/services", async () => ({
   })),
   note: "Price metadata is informational only. The runner inspects each service's actual HTTP 402 requirements before selecting.",
 }));
+
+type PreviewPlanBody = { goal?: string; policy?: UserSpendingPolicy; budgetTinybars?: number };
+app.post<{ Body: PreviewPlanBody }>("/api/agent/v2/plan", async (request, reply) => {
+  const body = request.body;
+  if (typeof body?.goal !== "string" || !body.goal.trim() || body.goal.length > 2_000) return reply.code(400).send({ error: "goal is required and must be at most 2000 characters." });
+  if (body.budgetTinybars !== undefined && (typeof body.budgetTinybars !== "number" || !Number.isSafeInteger(body.budgetTinybars) || body.budgetTinybars <= 0)) return reply.code(400).send({ error: "budgetTinybars must be a positive safe integer." });
+  const policy = body.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, mode: "preview" as const, expiresAt: Date.now() + 120_000 };
+  try { return await previewAgentV2Plan({ goal: body.goal, policy, budgetTinybars: body.budgetTinybars }); }
+  catch (error) { return reply.code(400).send({ paymentAttempted: false, error: error instanceof Error ? error.message : "Could not create a preview plan." }); }
+});
 
 type ReconciliationBody = { reservationId?: string; outcome?: "settled" | "failed" | "ambiguous"; transactionId?: string; note?: string };
 function reconciliationAuthorized(token: unknown): boolean {
