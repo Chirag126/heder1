@@ -95,3 +95,18 @@ CREATE TABLE IF NOT EXISTS api_rate_limits (
   request_count INTEGER NOT NULL CHECK (request_count >= 0),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS legacy_ledger_imports (
+  source_path TEXT PRIMARY KEY,
+  content_sha256 TEXT NOT NULL,
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS legacy_spending_holds (
+  source_path TEXT NOT NULL REFERENCES legacy_ledger_imports(source_path) DEFERRABLE INITIALLY DEFERRED,
+  day DATE NOT NULL,
+  reserved_tinybars BIGINT NOT NULL DEFAULT 0 CHECK (reserved_tinybars >= 0),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  PRIMARY KEY (source_path, day)
+);
+CREATE INDEX IF NOT EXISTS legacy_spending_holds_day_idx ON legacy_spending_holds(day);
