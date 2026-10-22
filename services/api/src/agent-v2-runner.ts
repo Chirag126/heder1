@@ -212,7 +212,7 @@ export async function runAgentV2Task(
     amountTinybars: String(selected.amountTinybars),
     receiverAccountId: selected.requirement.payTo,
     resourceUrl: selected.service.url,
-  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay });
+  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay, taskId: runId, taskBudgetTinybars: limits.budgetTinybars, maxPaidCallsPerTask: limits.maxPaidCalls });
   if (!reservation.allowed) throw new Error(reservation.reason);
   if (signal.aborted) throw new Error("Agent v2 task was cancelled before payment execution.");
 
