@@ -2,7 +2,7 @@ export type AgentMode = "preview" | "autonomous" | "approval-required";
 
 export type UserSpendingPolicy = {
   mode: AgentMode;
-  network: "hedera:testnet";
+  network: string;
   maxPaymentTinybars: number;
   taskBudgetTinybars: number;
   dailyBudgetTinybars: number;
