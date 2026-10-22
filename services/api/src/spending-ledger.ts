@@ -27,7 +27,7 @@ async function loadLedger(path: string): Promise<Ledger> {
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!value || typeof value !== "object") throw new Error("Spending ledger is malformed; payments are blocked.");
-    const raw = value as Partial<Ledger> & { version?: number };
+    const raw = value as { version?: number; entries?: unknown; reservations?: unknown };
     if (raw.version === 1 && Array.isArray(raw.entries)) {
       // Preserve every legacy reservation as a conservative, unreconciled balance.
       const entries = raw.entries as DayEntry[];
