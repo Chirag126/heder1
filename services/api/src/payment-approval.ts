@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { getAddress, verifyMessage } from "ethers";
 import { simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
+import { consumeGrantRecord, databaseConfigured, saveChallengeRecord, saveGrantRecord, savePolicyVersion, takeChallengeRecord } from "./database.js";
 
 export type ApprovedPaymentQuote = {
   serviceId: string;
@@ -21,7 +22,7 @@ function prune(now = Date.now()) {
 }
 
 /** Create a wallet message binding approval to the exact policy and exact quote. */
-export function createPaymentApprovalChallenge(input: {
+export async function createPaymentApprovalChallenge(input: {
   account: string; policy: UserSpendingPolicy;
   quote: Omit<ApprovedPaymentQuote, "expiresAt">; now?: number;
 }) {
@@ -60,32 +61,49 @@ export function createPaymentApprovalChallenge(input: {
     `Expires at: ${new Date(quote.expiresAt).toISOString()}`,
     "This signature approves only the exact quote above. It is not a transaction signature and cannot change the quote.",
   ].join("\n");
-  challenges.set(nonce, { account, nonce, message, expiresAt: quote.expiresAt, policy: input.policy, quote });
+  const challenge: Challenge = { account, nonce, message, expiresAt: quote.expiresAt, policy: input.policy, quote };
+  if (databaseConfigured()) {
+    await savePolicyVersion(account, input.policy);
+    await saveChallengeRecord("payment-approval", nonce, account, challenge, quote.expiresAt);
+  } else {
+    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for durable payment approvals in production.");
+    challenges.set(nonce, challenge);
+  }
   return { nonce, message, account, quote, expiresAt: new Date(quote.expiresAt).toISOString() };
 }
 
 export async function verifyPaymentApproval(input: { nonce: string; signature: string; now?: number }) {
   const now = input.now ?? Date.now();
   prune(now);
-  const challenge = challenges.get(input.nonce);
+  const challenge = databaseConfigured()
+    ? await takeChallengeRecord<Challenge>("payment-approval", input.nonce)
+    : challenges.get(input.nonce);
   if (!challenge) throw new Error("Payment approval challenge is missing, expired, or already used.");
-  challenges.delete(input.nonce);
+  if (!databaseConfigured()) challenges.delete(input.nonce);
   let recovered: string;
   try { recovered = getAddress(await verifyMessage(challenge.message, input.signature)); }
   catch { throw new Error("Payment approval signature is invalid."); }
   if (recovered !== challenge.account) throw new Error("Payment approval signature does not match the challenged wallet.");
   const token = randomBytes(32).toString("base64url");
-  approvals.set(token, { account: challenge.account, policy: challenge.policy, quote: challenge.quote, expiresAt: challenge.quote.expiresAt });
-  return { approvalToken: token, account: challenge.account, policy: challenge.policy, quote: challenge.quote, expiresAt: new Date(challenge.quote.expiresAt).toISOString(), singleUse: true };
+  const approval: Approval = { account: challenge.account, policy: challenge.policy, quote: challenge.quote, expiresAt: challenge.quote.expiresAt };
+  if (databaseConfigured()) await saveGrantRecord("payment-approval", token, approval.account, approval, approval.expiresAt);
+  else {
+    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for durable payment approvals in production.");
+    approvals.set(token, approval);
+  }
+  return { approvalToken: token, account: challenge.account, policy: challenge.policy, quote: challenge.quote, expiresAt: new Date(approval.expiresAt).toISOString(), singleUse: true };
 }
 
 /** Consume once; runner must still rediscover and exactly match the quote before signing. */
-export function consumePaymentApproval(token: string | undefined, now = Date.now()) {
+export async function consumePaymentApproval(token: string | undefined, now = Date.now()) {
   prune(now);
   if (!token) return { allowed: false as const, reason: "A wallet-signed quote-specific approval is required." };
-  const approval = approvals.get(token);
+  const approval = databaseConfigured()
+    ? await consumeGrantRecord<Approval>("payment-approval", token)
+    : approvals.get(token);
   if (!approval) return { allowed: false as const, reason: "Payment approval is invalid, expired, or already used." };
-  approvals.delete(token);
+  if (!databaseConfigured()) approvals.delete(token);
+  if (!databaseConfigured() && process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for durable payment approvals in production.");
   if (approval.expiresAt <= now) return { allowed: false as const, reason: "Payment approval expired." };
   return { allowed: true as const, ...approval };
 }
