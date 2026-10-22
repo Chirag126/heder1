@@ -3,6 +3,7 @@
  * Heder1 agent. This module never executes a payment or calls an LLM.
  */
 import { getApprovedServiceRegistry } from "./agent-v2.js";
+import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
 
 const TINYBARS_PER_HBAR = 100_000_000n;
 const DEFAULT_DAILY_TASK_QUOTA = 10;
@@ -31,6 +32,14 @@ export function getPublicPricing() {
       selfHosted: { price: "Free software", usage: "You pay your own hosting, model provider if added, and any resource payments." },
       hostedReadOnly: { price: "Free for read-only dashboard access", usage: "Read-only views and account context; subject to API rate limits and hosting availability." },
       hostedAgent: { price: "Not offered in this release", usage: "A paid hosted tier will be considered after real infrastructure costs and abuse patterns are measured." },
+    },
+    usageControls: {
+      dailyTaskQuotaPerWallet: dailyTaskQuota(),
+      quotaWindow: "rolling-24-hours",
+      maxPaymentTinybars: String(FIREWALL_MAX_PAYMENT_TINYBARS),
+      dailyReservedBudgetTinybars: String(FIREWALL_DAILY_BUDGET_TINYBARS),
+      maxPaymentAttemptsPerDay: FIREWALL_MAX_ATTEMPTS_PER_DAY,
+      maxPaidCallsPerTask: 3,
     },
     currentAgent: {
       model: "deterministic; no LLM inference is called",
