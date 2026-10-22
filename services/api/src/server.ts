@@ -342,7 +342,7 @@ app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", a
       note: body.note,
     });
     if (!result.updated) return reply.code(409).send(result);
-    await appendAuditEvent({ event: "agent.run_finished", outcome: body.outcome === "failed" ? "failed" : "accepted", details: { phase: "11", action: "reservation_reconciled", reservationId: body.reservationId, outcome: body.outcome, transactionId: body.transactionId ?? null } });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: body.outcome === "failed" ? "failed" : "accepted", details: { phase: "11", action: "reservation_reconciled", reservationId: body.reservationId, outcome: body.outcome ?? "ambiguous", transactionId: body.transactionId ?? null } });
     return result;
   } catch (error) { return reply.code(500).send({ updated: false, error: error instanceof Error ? error.message : "Could not reconcile reservation." }); }
 });
