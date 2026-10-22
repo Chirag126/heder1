@@ -225,3 +225,26 @@ export async function reconcilePostgresReservation(input: {
   if (input.outcome === "ambiguous") return transitionPostgresReservation({ reservationId: input.reservationId, status: "ambiguous", transactionId: input.transactionId, note: input.note });
   return transitionPostgresReservation({ reservationId: input.reservationId, status: input.outcome, transactionId: input.transactionId, note: input.note });
 }
+
+/** Recovery sweep: stale in-flight states become unknown, never automatically retried or released. */
+export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Promise<{ reservationsMarkedUnknown: number; tasksMarkedUnknown: number }> {
+  await importLegacyJsonLedger();
+  const minutes = Math.max(1, Math.ceil(staleAfterMs / 60_000));
+  return withDatabaseTransaction(async client => {
+    const reservations = await client.query(
+      `UPDATE payment_reservations
+       SET status='unknown', note='Recovery sweep found a stale in-flight state; verify Mirror Node/HashScan before reconciliation.', updated_at=now()
+       WHERE status IN ('reserved','submitted') AND updated_at < now() - ($1 * interval '1 minute')
+       RETURNING id`,
+      [minutes],
+    );
+    const tasks = await client.query(
+      `UPDATE task_runs
+       SET status='unknown', error_code='stale_run_requires_reconciliation', updated_at=now()
+       WHERE status IN ('reserved','submitted') AND updated_at < now() - ($1 * interval '1 minute')
+       RETURNING run_id`,
+      [minutes],
+    );
+    return { reservationsMarkedUnknown: reservations.rowCount ?? 0, tasksMarkedUnknown: tasks.rowCount ?? 0 };
+  });
+}
