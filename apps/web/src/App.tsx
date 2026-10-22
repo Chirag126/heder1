@@ -114,7 +114,7 @@ export default function App() {
     setBusy("simulate"); setError(""); setPolicySimulation(null);
     try {
       if (forcePreview || agentMode === "preview") {
-        const response = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: taskGoal.trim(), policy: buildUserPolicy(), budgetTinybars: Number(taskBudgetTinybars) }) });
+        const response = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: taskGoal.trim(), policy: forcePreview ? { ...buildUserPolicy(), mode: "preview" as const } : buildUserPolicy(), budgetTinybars: Number(taskBudgetTinybars) }) });
         const result = await response.json() as PlanPreview;
         if (!response.ok) throw new Error(result.error ?? "Quote preview failed.");
         setPlanDetails(result);
