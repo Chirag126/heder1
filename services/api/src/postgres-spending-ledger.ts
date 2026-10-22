@@ -228,7 +228,7 @@ export async function reconcilePostgresReservation(input: {
 
 /** Recovery sweep: stale in-flight states become unknown, never automatically retried or released. */
 export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Promise<{ reservationsMarkedUnknown: number; tasksMarkedUnknown: number; proofsMarkedUnknown: number }> {
-  await importLegacyJsonLedger();
+  await ensureDatabaseReady();
   const minutes = Math.max(1, Math.ceil(staleAfterMs / 60_000));
   return withDatabaseTransaction(async client => {
     const reservations = await client.query(
