@@ -36,7 +36,7 @@ export async function getTestnetAccountSnapshot(
   accountId: string,
   options: ReadonlyToolOptions = {},
 ): Promise<HederaAccountSnapshot> {
-  if (!/^0\\.0\\.[1-9]\\d{0,19}$/.test(accountId)) {
+  if (!/^0\.0\.[1-9]\d{0,19}$/.test(accountId)) {
     throw new Error("accountId must be a Hedera account ID in 0.0.x format.");
   }
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -68,7 +68,7 @@ export async function getTestnetAccountSnapshot(
   const evmAddress = typeof payload.evm_address === "string" && /^0x[0-9a-fA-F]{40}$/.test(payload.evm_address)
     ? payload.evm_address
     : null;
-  const expiryTime = typeof payload.expiration_timestamp === "string" && /^\\d+(?:\\.\\d+)?$/.test(payload.expiration_timestamp)
+  const expiryTime = typeof payload.expiration_timestamp === "string" && /^\d+(?:\.\d+)?$/.test(payload.expiration_timestamp)
     ? payload.expiration_timestamp
     : null;
 
