@@ -5,6 +5,7 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
+import type { ApprovedPaymentQuote } from "./payment-approval.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import {
   DEFAULT_AGENT_V2_LIMITS,
@@ -140,13 +141,14 @@ export function isAgentV2Enabled(): boolean {
  */
 export async function runAgentV2Task(
   input: AgentV2TaskInput,
-  options: { signal: AbortSignal; runId?: string },
+  options: { signal: AbortSignal; runId?: string; approvedQuote?: ApprovedPaymentQuote },
 ): Promise<AgentV2TaskResult> {
   if (!isAgentV2Enabled()) throw new Error("Agent v2 is disabled. Enable HEDERA_AGENT_V2_ENABLED=true for local Hedera Testnet development only.");
   if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
   const policy = input.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 };
   if (policy.expiresAt <= Date.now()) throw new Error("Wallet authorization or user policy expired before task execution.");
-  if (policy.mode !== "autonomous") throw new Error(policy.mode === "preview" ? "Preview mode never signs or sends payments." : "Approval-required mode needs an explicit approval flow; no payment was signed or sent.");
+  if (policy.mode === "preview") throw new Error("Preview mode never signs or sends payments.");
+  if (policy.mode === "approval-required" && !options.approvedQuote) throw new Error("Approval-required mode needs a wallet-signed quote-specific approval; no payment was signed or sent.");
   const config = getX402Configuration();
   if (!config) throw new Error("Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env.");
 
@@ -205,7 +207,23 @@ export async function runAgentV2Task(
   // The task budget is reserved logically for the whole run; the persistent
   // firewall reservation below is written before the signer is constructed.
   const selected = decision.selected;
-  const simulation = simulateSpendingPolicy(policy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
+  const approvedQuote = options.approvedQuote;
+  if (approvedQuote) {
+    if (approvedQuote.expiresAt <= Date.now() ||
+        approvedQuote.serviceId !== selected.service.id ||
+        approvedQuote.network !== selected.requirement.network ||
+        approvedQuote.asset !== selected.requirement.asset ||
+        approvedQuote.amountTinybars !== selected.amountTinybars ||
+        approvedQuote.receiverAccountId !== selected.requirement.payTo) {
+      throw new Error("Discovered quote does not exactly match the wallet-approved service, network, asset, amount, receiver, or expiry.");
+    }
+  }
+  const enforcementPolicy = approvedQuote ? {
+    ...policy,
+    mode: "autonomous" as const,
+    approvalThresholdTinybars: Math.max(policy.approvalThresholdTinybars, selected.amountTinybars),
+  } : policy;
+  const simulation = simulateSpendingPolicy(enforcementPolicy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
   if (!simulation.allowed) throw new Error(simulation.reason);
   if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
   const reservation = await reserveAgentV2Spend({
