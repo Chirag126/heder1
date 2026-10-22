@@ -126,7 +126,7 @@ test("Phase 10 stops through the API without paying when every 402 quote exceeds
     });
   };
   try {
-    const challenge = createAuthorizationChallenge(wallet.address, Date.now(), AUTHORIZATION_SCOPE_V2);
+    const challenge = await createAuthorizationChallenge(wallet.address, Date.now(), AUTHORIZATION_SCOPE_V2);
     const signature = await wallet.signMessage(challenge.message);
     const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature });
     const response = await app.inject({
