@@ -14,6 +14,6 @@ export function validateReadonlyToolCall(name: unknown, args: unknown): { accoun
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
   const input = args as Record<string, unknown>;
   if (Object.keys(input).some((key) => key !== "accountId")) throw new Error("Unexpected tool argument.");
-  if (typeof input.accountId !== "string" || !/^0\\.0\\.[0-9]+$/.test(input.accountId)) throw new Error("accountId must be a Hedera account ID such as 0.0.123.");
+  if (typeof input.accountId !== "string" || !/^0\.0\.[0-9]+$/.test(input.accountId)) throw new Error("accountId must be a Hedera account ID such as 0.0.123.");
   return { accountId: input.accountId };
 }
