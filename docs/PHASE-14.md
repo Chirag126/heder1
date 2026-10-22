@@ -20,7 +20,7 @@ The web app uses hash-based routes so the existing Vite deployment can host all 
 2. Verify the wallet is on Hedera Testnet; the UI never enables mainnet execution.
 3. Set spending limits and choose at least one code-registered approved service.
 4. Enter a task in Agent Playground and preview live service quotes. Preview uses `POST /api/agent/v2/plan` and reports that no payment was attempted.
-5. For execution, explicitly consent and use the existing wallet-signed one-time authorization or quote-specific approval flow.
+5. In Agent Playground, choose bounded execution or exact-quote approval, connect/switch the wallet to Hedera Testnet, give explicit consent, then sign the one-time authorization or approve the exact quote. Previewing quotes does not change the selected execution mode.
 6. Observe the task response, warnings, and cancellation result. Cancellation is a request; a transaction already submitted may still settle.
 7. Inspect Payments & Receipts and independently verify any transaction on HashScan. Use Audit & HCS Evidence to check local chain integrity and independently verify anchored hashes.
 
