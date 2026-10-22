@@ -4,7 +4,7 @@ import "./dashboard.css";
 type Eip1193Provider = { request(args: { method: string; params?: unknown[] | object }): Promise<unknown> };
 declare global { interface Window { ethereum?: Eip1193Provider } }
 type AuditRecord = { id: string; sequence: number; timestamp: string; event: string; outcome: string; hash: string; details: Record<string, unknown> };
-type PageId = "overview" | "playground" | "permissions" | "payments" | "audit";
+type PageId = "overview" | "playground" | "marketplace" | "permissions" | "payments" | "audit";
 type PlanPreview = {
   goal?: string;
   selected?: { serviceId: string; description?: string; amountTinybars: number; amountHbar: string; asset?: string; receiverAccountId?: string } | null;
@@ -12,6 +12,12 @@ type PlanPreview = {
   paymentAttempted?: boolean;
   note?: string;
   error?: string;
+};
+type MarketplaceNegotiation = {
+  negotiationId: string; decision: string;
+  selected?: { agentId: string; agentName: string; serviceId: string; amountTinybars: number | null; amountHbar: string | null; reason: string } | null;
+  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string }>;
+  paymentAttempted: boolean; nextStep: string; error?: string;
 };
 type DashboardData = {
   health?: { status: string; service: string; network: string };
@@ -59,10 +65,13 @@ export default function App() {
   const [sessionPaused, setSessionPaused] = useState(false);
   const [page, setPage] = useState<PageId>(() => {
     const route = window.location.hash.replace("#", "");
-    return (["overview", "playground", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview";
+    return (["overview", "playground", "marketplace", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview";
   });
   const [taskGoal, setTaskGoal] = useState("Find the cheapest approved source for a short report and return its receipt");
   const [planDetails, setPlanDetails] = useState<PlanPreview | null>(null);
+  const [marketplaceGoal, setMarketplaceGoal] = useState("Create a detailed full report");
+  const [marketplaceBudget, setMarketplaceBudget] = useState("100000");
+  const [marketplaceResult, setMarketplaceResult] = useState<MarketplaceNegotiation | null>(null);
   const [allowedServiceIds, setAllowedServiceIds] = useState<string[]>(["heder1-full-report", "heder1-short-summary"]);
   const navigate = (next: PageId) => {
     window.location.hash = next;
@@ -71,7 +80,7 @@ export default function App() {
   useEffect(() => {
     const syncRoute = () => {
       const route = window.location.hash.replace("#", "");
-      setPage((["overview", "playground", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview");
+      setPage((["overview", "playground", "marketplace", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview");
     };
     window.addEventListener("hashchange", syncRoute);
     return () => window.removeEventListener("hashchange", syncRoute);
@@ -235,6 +244,23 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); if (executionSubmitted) setNotice("Settlement status unknown — reconciling. Do not retry until you inspect Payments & Receipts and verify any transaction on HashScan."); await refresh(); }
     finally { setBusy(""); setActiveRunId(""); }
   }
+  async function negotiateMarketplace() {
+    setBusy("marketplace"); setError(""); setNotice(""); setMarketplaceResult(null);
+    try {
+      const budgetTinybars = Number(marketplaceBudget);
+      if (!Number.isSafeInteger(budgetTinybars) || budgetTinybars < 1 || budgetTinybars > 500000) throw new Error("Marketplace budget must be between 1 and 500000 tinybars.");
+      const response = await fetch(apiUrl("/api/marketplace/negotiate"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: marketplaceGoal.trim(), budgetTinybars }) });
+      const result = await response.json() as MarketplaceNegotiation;
+      if (!response.ok) throw new Error(result.error ?? "Marketplace negotiation failed.");
+      setMarketplaceResult(result);
+      if (result.selected) {
+        setTaskGoal(marketplaceGoal.trim());
+        setAllowedServiceIds([result.selected.serviceId]);
+        setNotice("Offer selected. No payment was attempted. Review spending permissions and continue to Agent Playground when ready to hire this provider.");
+      } else setNotice("No eligible offer was selected. No payment was attempted.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Marketplace negotiation failed."); }
+    finally { setBusy(""); }
+  }
   async function verifyAnchor() {
     setBusy("verify"); setError(""); setVerification(null);
     try {
@@ -258,6 +284,7 @@ export default function App() {
   const pageTitles: Record<PageId, { eyebrow: string; title: string; description: string }> = {
     overview: { eyebrow: "YOUR PAYMENT WORKSPACE", title: "Agent payments, under control.", description: "A clear view of readiness, limits, task activity and verifiable evidence." },
     playground: { eyebrow: "AGENT PLAYGROUND", title: "Give your agent a task.", description: "Preview real registered-service quotes first. Nothing is paid during preview." },
+    marketplace: { eyebrow: "AGENT MARKETPLACE", title: "Let agents compete for the task.", description: "Discover provider agents, compare live x402 quotes, and select a bounded offer before authorizing any payment." },
     permissions: { eyebrow: "SPENDING & PERMISSIONS", title: "You set the boundaries.", description: "Choose the test network, set hard limits, approve services and control each authorization." },
     payments: { eyebrow: "PAYMENTS & RECEIPTS", title: "Follow every payment.", description: "See the receipt returned by the API and verify transaction evidence independently." },
     audit: { eyebrow: "AUDIT & HCS EVIDENCE", title: "Evidence, not assumptions.", description: "Inspect the local hash chain and verify anchored audit hashes against the public Mirror Node." },
@@ -276,6 +303,7 @@ export default function App() {
       {([
         ["overview", "Overview", "⌂"],
         ["playground", "Agent Playground", "✳"],
+        ["marketplace", "Agent Marketplace", "⇄"],
         ["permissions", "Spending & Permissions", "◈"],
         ["payments", "Payments & Receipts", "↗"],
         ["audit", "Audit & HCS Evidence", "◇"],
@@ -368,6 +396,33 @@ export default function App() {
       </section>
       {taskReceipts.length > 0 && <section className="panel wide-panel"><div className="panel-head"><div><p className="dash-kicker">03 / TASK RESULT</p><h2>Receipts returned by the API</h2></div><span className="chip">{taskReceipts.length} RECEIPT(S)</span></div><div className="receipt-list">{taskReceipts.map(receipt => <div key={receipt.transactionId}><div><strong>{receipt.serviceId}</strong><small>{receipt.amountHbar} HBAR · {receipt.status}</small><code>{receipt.transactionId}</code></div><a href={receipt.explorerUrl} target="_blank" rel="noreferrer">Verify on HashScan ↗</a></div>)}</div>{taskWarnings.length > 0 && <div className="safety-callout warning-callout"><strong>Task warnings</strong><p>{taskWarnings.join(" ")}</p></div>}</section>}
       <footer className="dash-footer"><span>Tasks run only against the code-registered local testnet services.</span><span>Never retry while settlement status is unknown.</span></footer>
+    </>}
+
+    {page === "marketplace" && <>
+      <section className="panel wide-panel">
+        <div className="panel-head"><div><p className="dash-kicker">01 / BUYER AGENT</p><h2>Describe the job to hire</h2></div><span className="chip">NO PAYMENT DURING NEGOTIATION</span></div>
+        <p className="panel-copy">Heder1's buyer agent discovers live HTTP 402 prices from the local provider agents. A detailed/full-report request prefers the research provider when it fits your budget; a generic request selects the lowest-priced eligible offer.</p>
+        <label className="form-label" htmlFor="marketplace-goal">Task requested</label>
+        <textarea id="marketplace-goal" className="task-textarea" maxLength={2000} value={marketplaceGoal} onChange={event => setMarketplaceGoal(event.target.value)} placeholder="Describe the task a provider agent should complete…" />
+        <label className="form-label" htmlFor="marketplace-budget">Maximum task budget (tinybars)</label>
+        <input id="marketplace-budget" className="number-input" type="number" min="1" max="500000" value={marketplaceBudget} onChange={event => setMarketplaceBudget(event.target.value)} />
+        <div className="button-row"><button className="button primary" onClick={() => void negotiateMarketplace()} disabled={busy === "marketplace" || !marketplaceGoal.trim()}>{busy === "marketplace" ? "Discovering and comparing…" : "Discover & negotiate offers"}</button><span className="panel-footnote">100,000 tinybars = 0.001 HBAR · Testnet only</span></div>
+      </section>
+      {marketplaceResult && <>
+        <section className="panel wide-panel">
+          <div className="panel-head"><div><p className="dash-kicker">02 / PROVIDER OFFERS</p><h2>{marketplaceResult.selected ? "Buyer selected an offer" : "No eligible provider"}</h2></div><span className={marketplaceResult.selected ? "chip good-chip" : "chip"}>{marketplaceResult.offers.length} OFFERS</span></div>
+          <div className="permission-status-grid">
+            {marketplaceResult.offers.map(offer => <article className="permission-stat" key={offer.agentId}>
+              <span>{offer.agentName}</span><strong>{offer.amountHbar ? offer.amountHbar + " HBAR" : "No eligible quote"}</strong>
+              <small>{offer.serviceId} · {offer.status}</small><p>{offer.description}</p><p>{offer.reason}</p>
+              <small>Capabilities: {offer.capabilities.join(", ")}</small><small>Identity: {offer.identityStatus}</small>
+            </article>)}
+          </div>
+          {marketplaceResult.selected && <div className="safety-callout"><strong>Selected: {marketplaceResult.selected.agentName}</strong><p>{marketplaceResult.selected.reason} This selection is not payment authorization.</p><div className="button-row"><button className="button primary" onClick={() => navigate("playground")}>Review and hire in Agent Playground →</button><span className="panel-footnote">The selected provider is preselected in Spending & Permissions. You must still authorize the task.</span></div></div>}
+          <p className="panel-footnote">Negotiation ID: <code>{marketplaceResult.negotiationId}</code>. Payment attempted: {marketplaceResult.paymentAttempted ? "yes" : "no"}. Provider IDs are local and unverified; this is not full A2A/ACP conformance.</p>
+        </section>
+      </>}
+      <footer className="dash-footer"><span>Provider quotes are discovered from the live x402 HTTP 402 response.</span><span>No quote selection can bypass wallet authorization, spending policy, or the server kill switch.</span></footer>
     </>}
 
     {page === "permissions" && <>

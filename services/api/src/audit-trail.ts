@@ -11,6 +11,7 @@ export type AuditEvent =
   | "agent.authorization_rejected"
   | "agent.run_started"
   | "agent.run_finished"
+  | "marketplace.negotiation_completed"
   | "payment.attempted"
   | "payment.rejected"
   | "payment.settled"

@@ -16,6 +16,7 @@ import { claimTaskRun, checkDatabaseHealth, consumeRateLimit, databaseConfigured
 import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadinessChallenge, verifyMainnetReadinessChallenge, type MainnetReadinessInput } from "./mainnet-readiness.js";
 import { getTestnetAccountSnapshot } from "./hedera-readonly-tools.js";
 import { dailyTaskQuota, estimateTaskCost, getPublicPricing, reportActualTaskCost } from "./cost-report.js";
+import { getMarketplaceAgentCards, negotiateMarketplaceOffers } from "./agent-marketplace.js";
 
 export const app = Fastify({
   logger: {
@@ -501,6 +502,81 @@ app.get("/api/agent/v2/status", async () => ({
   execution: "deterministic-local-testnet-only",
   paymentExecutionEnabled: isAgentV2Enabled() && process.env.NODE_ENV !== "production",
 }));
+
+
+/**
+ * Phase 18: a local buyer-agent card for discovery. This is a Heder1 marketplace
+ * descriptor, not a claim of complete A2A protocol conformance.
+ */
+app.get("/.well-known/agent-card.json", async () => ({
+  name: "Heder1 Buyer Agent",
+  description: "Discovers local provider-agent offers and can hire an approved provider through the existing policy-controlled x402 runner.",
+  version: "1.0.0",
+  protocol: "heder1-marketplace-v1",
+  capabilities: ["provider-discovery", "quote-evaluation", "policy-bounded-x402-hiring"],
+  skills: [{ id: "discover-and-hire-provider", name: "Discover and hire a provider", inputModes: ["application/json"], outputModes: ["application/json"] }],
+  security: { network: "hedera:testnet", paymentExecutionEnabled: isAgentV2Enabled(), paymentStillRequiresExistingWalletAuthorization: true },
+  limitations: ["Local demo providers only", "No cryptographic HCS-14/ERC-8004 identity yet", "Not a full A2A/ACP implementation"],
+}));
+
+app.get("/api/marketplace/agents", async () => ({
+  agents: getMarketplaceAgentCards(),
+  protocol: "heder1-marketplace-v1",
+  note: "Local provider-agent adapters; identities are not cryptographically verified and providers are not independently hosted services.",
+}));
+
+type MarketplaceNegotiateBody = { goal?: string; budgetTinybars?: number };
+app.post<{ Body: MarketplaceNegotiateBody }>("/api/marketplace/negotiate", async (request, reply) => {
+  const body = request.body;
+  if (typeof body?.goal !== "string" || !body.goal.trim() || body.goal.length > 2000) {
+    return reply.code(400).send({ error: "goal is required and must be at most 2000 characters.", paymentAttempted: false });
+  }
+  const budgetTinybars = body.budgetTinybars ?? 100_000;
+  if (!Number.isSafeInteger(budgetTinybars) || budgetTinybars < 1 || budgetTinybars > 500_000) {
+    return reply.code(400).send({ error: "budgetTinybars must be between 1 and 500000.", paymentAttempted: false });
+  }
+  try {
+    const policy: UserSpendingPolicy = {
+      ...DEFAULT_USER_SPENDING_POLICY,
+      mode: "preview",
+      taskBudgetTinybars: budgetTinybars,
+      maxPaymentTinybars: Math.min(100_000, budgetTinybars),
+      allowedServiceIds: ["heder1-full-report", "heder1-short-summary"],
+      expiresAt: Date.now() + 120_000,
+    };
+    const plan = await previewAgentV2Plan({ goal: body.goal, policy, budgetTinybars });
+    const negotiation = negotiateMarketplaceOffers({
+      goal: body.goal,
+      budgetTinybars,
+      offers: plan.candidates,
+    });
+    await appendAuditEvent({
+      event: "marketplace.negotiation_completed",
+      outcome: negotiation.selected ? "accepted" : "rejected",
+      details: {
+        negotiationId: negotiation.negotiationId,
+        budgetTinybars,
+        offerCount: negotiation.offers.length,
+        selectedAgentId: negotiation.selected?.agentId ?? null,
+        selectedServiceId: negotiation.selected?.serviceId ?? null,
+        paymentAttempted: false,
+      },
+    });
+    return {
+      ...negotiation,
+      discovery: { httpCalls: plan.discoveryHttpCalls, network: "hedera:testnet" },
+      paymentAttempted: false,
+      nextStep: negotiation.selected
+        ? "To hire the selected provider, use POST /api/agent/v2/run with a fresh runId, a valid wallet authorization, the same goal/budget, and allowedServiceIds containing only the selected service. The existing runner re-discovers the live quote and enforces the signed policy before payment."
+        : "No provider offer met the requested task and budget. No payment was attempted.",
+    };
+  } catch (error) {
+    return reply.code(502).send({
+      error: error instanceof Error ? error.message : "Marketplace quote discovery failed.",
+      paymentAttempted: false,
+    });
+  }
+});
 
 app.get("/api/agent/v2/services", async () => ({
   services: getApprovedServiceRegistry().map((service) => ({
