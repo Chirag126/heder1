@@ -17,6 +17,11 @@ import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadi
 import { getTestnetAccountSnapshot } from "./hedera-readonly-tools.js";
 import { dailyTaskQuota, estimateTaskCost, getPublicPricing, reportActualTaskCost } from "./cost-report.js";
 import { getMarketplaceAgentCards, negotiateMarketplaceOffers } from "./agent-marketplace.js";
+import { getHcs14IdentityCards } from "./agent-identity.js";
+import { parseA2aMessageRequest, createA2aMessageResponse, createA2aError } from "./a2a-protocol.js";
+import { getHtsPaymentCapabilities } from "./hts-payments.js";
+import { createRecurringPaymentDraft, listRecurringPaymentDrafts, cancelRecurringPaymentDraft } from "./recurring-payments.js";
+import { HEDERA_READONLY_TOOLS, validateReadonlyToolCall } from "./agent-tools.js";
 
 export const app = Fastify({
   logger: {
@@ -512,11 +517,12 @@ app.get("/.well-known/agent-card.json", async () => ({
   name: "Heder1 Buyer Agent",
   description: "Discovers local provider-agent offers and can hire an approved provider through the existing policy-controlled x402 runner.",
   version: "1.0.0",
-  protocol: "heder1-marketplace-v1",
+  protocol: "a2a",
+  identities: getHcs14IdentityCards(),
   capabilities: ["provider-discovery", "quote-evaluation", "policy-bounded-x402-hiring"],
   skills: [{ id: "discover-and-hire-provider", name: "Discover and hire a provider", inputModes: ["application/json"], outputModes: ["application/json"] }],
   security: { network: "hedera:testnet", paymentExecutionEnabled: isAgentV2Enabled(), paymentStillRequiresExistingWalletAuthorization: true },
-  limitations: ["Local demo providers only", "No cryptographic HCS-14/ERC-8004 identity yet", "Not a full A2A/ACP implementation"],
+  limitations: ["Local demo providers only", "HCS-14-style deterministic AID generation is not proof of endpoint control", "Bounded message/send adapter only; not full A2A conformance"],
 }));
 
 app.get("/api/marketplace/agents", async () => ({
@@ -575,6 +581,89 @@ app.post<{ Body: MarketplaceNegotiateBody }>("/api/marketplace/negotiate", async
       error: error instanceof Error ? error.message : "Marketplace quote discovery failed.",
       paymentAttempted: false,
     });
+  }
+});
+
+
+/** HCS-14-style deterministic identity cards; identifiers do not attest endpoint ownership. */
+app.get("/api/agent-identities", async () => ({
+  standard: "HCS-14 draft / local AID generation",
+  identities: getHcs14IdentityCards(),
+  verification: "Deterministic identifier only; no registry publication or endpoint-control proof.",
+}));
+
+/** Bounded A2A JSON-RPC message/send adapter. Negotiation still never initiates payment. */
+app.post("/api/a2a", async (request, reply) => {
+  let parsed: { id: string | number; text: string };
+  try { parsed = parseA2aMessageRequest(request.body); }
+  catch (error) { return reply.code(400).send(createA2aError(null, -32600, error instanceof Error ? error.message : "Invalid A2A request.")); }
+  try {
+    const budgetTinybars = 100_000;
+    const policy: UserSpendingPolicy = {
+      ...DEFAULT_USER_SPENDING_POLICY, mode: "preview", taskBudgetTinybars: budgetTinybars,
+      maxPaymentTinybars: budgetTinybars, allowedServiceIds: ["heder1-full-report", "heder1-short-summary"],
+      expiresAt: Date.now() + 120_000,
+    };
+    const plan = await previewAgentV2Plan({ goal: parsed.text, policy, budgetTinybars });
+    const negotiation = negotiateMarketplaceOffers({ goal: parsed.text, budgetTinybars, offers: plan.candidates });
+    return createA2aMessageResponse(parsed.id, {
+      protocol: "a2a-json-rpc-message-send",
+      buyerIdentity: getHcs14IdentityCards()[0],
+      negotiation,
+      discovery: { httpCalls: plan.discoveryHttpCalls, network: "hedera:testnet" },
+      paymentAttempted: false,
+      note: "Offer selection is not payment authorization. Execution still requires the existing wallet-signed approval and policy-controlled runner.",
+    });
+  } catch (error) {
+    return reply.code(502).send(createA2aError(parsed.id, -32000, error instanceof Error ? error.message : "A2A quote discovery failed."));
+  }
+});
+
+/** HTS discovery only. The current exact x402 path is HBAR-only and cannot settle these tokens. */
+app.get("/api/x402/hts-capabilities", async () => ({
+  network: "hedera:testnet", defaultAsset: "0.0.0", executableAssetTypes: ["HBAR"],
+  tokenCapabilities: getHtsPaymentCapabilities(),
+  executionEnabled: false,
+}));
+
+/** Recurring-payment drafts are inert intents; no on-chain schedule or transfer is submitted. */
+app.get("/api/recurring-payments/drafts", async () => ({
+  drafts: listRecurringPaymentDrafts(),
+  executionEnabled: false,
+  storage: "in-memory-development-only",
+}));
+app.post<{ Body: { serviceId?: string; amountTinybars?: number; interval?: "daily" | "weekly" | "monthly"; maxExecutions?: number; expiresAt?: string } }>("/api/recurring-payments/drafts", async (request, reply) => {
+  const body = request.body;
+  if (typeof body?.serviceId !== "string" || !Number.isSafeInteger(body.amountTinybars) ||
+      (body.interval !== "daily" && body.interval !== "weekly" && body.interval !== "monthly") ||
+      !Number.isSafeInteger(body.maxExecutions) || typeof body.expiresAt !== "string") {
+    return reply.code(400).send({ error: "serviceId, amountTinybars, interval, maxExecutions and expiresAt are required." });
+  }
+  try {
+    const draft = createRecurringPaymentDraft({ serviceId: body.serviceId, amountTinybars: body.amountTinybars as number, interval: body.interval, maxExecutions: body.maxExecutions as number, expiresAt: body.expiresAt });
+    await appendAuditEvent({ event: "recurring_payment.draft_created", outcome: "accepted", details: { draftId: draft.id, serviceId: draft.serviceId, amountTinybars: draft.amountTinybars, interval: draft.interval, maxExecutions: draft.maxExecutions, expiresAt: draft.expiresAt, onChainSubmitted: false } });
+    return reply.code(201).send(draft);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid recurring-payment draft.", executionEnabled: false });
+  }
+});
+app.post<{ Params: { id: string } }>("/api/recurring-payments/drafts/:id/cancel", async (request, reply) => {
+  const draft = cancelRecurringPaymentDraft(request.params.id);
+  if (!draft) return reply.code(404).send({ error: "Draft not found." });
+  await appendAuditEvent({ event: "recurring_payment.draft_cancelled", outcome: "accepted", details: { draftId: draft.id, onChainCancelRequired: false } });
+  return { draft, executionEnabled: false };
+});
+
+/** Read-only tool catalogue and dispatcher; deliberately no signing or transfer tools. */
+app.get("/api/agent-tools", async () => ({ tools: HEDERA_READONLY_TOOLS, execution: "read-only" }));
+app.post<{ Body: { name?: unknown; arguments?: unknown } }>("/api/agent-tools/call", async (request, reply) => {
+  try {
+    const input = validateReadonlyToolCall(request.body?.name, request.body?.arguments);
+    const snapshot = await getTestnetAccountSnapshot(input.accountId);
+    await appendAuditEvent({ event: "agent_tool.readonly_account_context", outcome: "accepted", details: { accountId: input.accountId, network: "hedera:testnet", readOnly: true } });
+    return { tool: "hedera_testnet_account_context", result: snapshot, readOnly: true };
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "Read-only tool call failed.", readOnly: true });
   }
 });
 

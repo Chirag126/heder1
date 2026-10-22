@@ -8,6 +8,16 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 
 > **Current status:** Phases 0–17 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Phase 15 adds a bounded, read-only Hedera Testnet account-context tool backed by the public Mirror Node API; Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies to avoid unnecessary migration risk. Phase 16 adds public pricing disclosure, bounded cost estimates, per-wallet daily task quotas, and receipt-based actual cost reports. The current runner is deterministic and does not call an LLM; hosted-agent billing and model-provider integration are deferred until actual operating costs and a model path are established. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
 
+## Recent integration surfaces (Phase 19)
+
+- Deterministic HCS-14-style agent identifiers: `GET /api/agent-identities`.
+- Bounded A2A JSON-RPC `message/send` adapter: `POST /api/a2a`; quote discovery only, no payment execution.
+- HTS token capability discovery: `GET /api/x402/hts-capabilities`; HBAR remains the only executable asset.
+- Recurring payment drafts: `GET/POST /api/recurring-payments/drafts` and `POST /api/recurring-payments/drafts/:id/cancel`. These are in-memory, inert drafts; Hedera Scheduled Transactions are not yet submitted.
+- Restricted read-only tool catalogue/call: `GET /api/agent-tools` and `POST /api/agent-tools/call`; no signing or transfers.
+
+See [Phase 19 integration boundaries](docs/PHASE-19-INTEGRATIONS.md) for safety and maturity details.
+
 ## Table of contents
 
 - [Features](#features)
