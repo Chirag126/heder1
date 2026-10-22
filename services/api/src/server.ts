@@ -5,7 +5,7 @@ import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js"
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
-import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
+import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
@@ -109,6 +109,14 @@ app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/v
     await appendAuditEvent({ event: "authorization.rejected", outcome: "rejected", details: { stage: "signature-verification", reason: error instanceof Error ? error.message : "Wallet authorization failed." } });
     return reply.code(401).send({ error: error instanceof Error ? error.message : "Wallet authorization failed." });
   }
+});
+
+/** Revoke a short-lived grant that has not yet been consumed. Never log the token. */
+app.post<{ Body: { authorizationToken?: string } }>("/api/authorization/revoke", async (request, reply) => {
+  const result = revokeAuthorizationGrant(request.body?.authorizationToken);
+  if (!result.revoked) return reply.code(404).send(result);
+  await appendAuditEvent({ event: "authorization.grant_revoked", outcome: "accepted", details: { revoked: true } });
+  return { revoked: true };
 });
 
 /** Local audit integrity summary; does not expose payment proofs or wallet signatures. */
