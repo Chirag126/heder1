@@ -5,7 +5,7 @@ type Eip1193Provider = { request(args: { method: string; params?: unknown[] | ob
 declare global { interface Window { ethereum?: Eip1193Provider } }
 type AuditRecord = { id: string; sequence: number; timestamp: string; event: string; outcome: string; hash: string; details: Record<string, unknown> };
 type DashboardData = {
-  health?: { status: string; service: string; network: string };
+  health?: { status: string; service: string; network: string };\n  networks?: { selectedNetwork: string; enabledNetworks: string[]; mainnet: { availableForReadinessReview: boolean; paymentExecutionEnabled: boolean; reason: string } };
   x402?: { network: string; sdkConfigured: boolean; accountId: string | null; receiverAccountId: string | null; paymentExecutionEnabled: boolean; reason: string };
   agentV2?: { enabled: boolean; killSwitchEnabled?: boolean; paymentExecutionEnabled: boolean };
   agent?: { enabled: boolean; policy: { maxAmountHbar: string; allowedResource: string; note: string }; spendingFirewall: { maxPaymentTinybars: string; dailyBudgetTinybars: string; maxAttemptsPerUtcDay: number; ledger: string; multiInstanceSafe: boolean } };
@@ -20,7 +20,7 @@ const shorten = (value: string, start = 10, end = 7) => value.length > start + e
 const hashscanTx = (id: string) => "https://hashscan.io/testnet/transaction/" + encodeURIComponent(id);
 
 export default function App() {
-  const [data, setData] = useState<DashboardData>({});
+  const [data, setData] = useState<DashboardData>({});\n  const [networkMode, setNetworkMode] = useState("hedera:testnet");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [wallet, setWallet] = useState("");
@@ -55,8 +55,8 @@ export default function App() {
       return body as T;
     };
     try {
-      const [health, x402, agent, agentV2, audit, anchors, history] = await Promise.all([
-        get<NonNullable<DashboardData["health"]>>("/api/health"),
+      const [health, networks, x402, agent, agentV2, audit, anchors, history] = await Promise.all([
+        get<NonNullable<DashboardData["health"]>>("/api/health"),\n        get<NonNullable<DashboardData["networks"]>>("/api/networks"),
         get<NonNullable<DashboardData["x402"]>>("/api/x402/status"),
         get<NonNullable<DashboardData["agent"]>>("/api/agent/status"),
         get<NonNullable<DashboardData["agentV2"]>>("/api/agent/v2/status"),
@@ -64,7 +64,7 @@ export default function App() {
         get<NonNullable<DashboardData["anchors"]>>("/api/audit/anchors"),
         get<{ records: AuditRecord[] }>("/api/audit/records?limit=100"),
       ]);
-      setData({ health, x402, agent, agentV2, audit, anchors, history: history.records });
+      setData({ health, networks, x402, agent, agentV2, audit, anchors, history: history.records });\n      if (networks.enabledNetworks.includes(networkMode)) setNetworkMode(networks.selectedNetwork);
       if (!verifyInput.topicId && anchors.anchors[0]) {
         const latest = anchors.anchors[anchors.anchors.length - 1];
         setVerifyInput({ topicId: latest.topicId, sequenceNumber: String(latest.sequenceNumber), auditHash: latest.auditRecordHash });
@@ -72,7 +72,7 @@ export default function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Dashboard refresh failed. Is the API running?");
     } finally { setLoading(false); }
-  }, [verifyInput.topicId]);
+  }, [verifyInput.topicId, networkMode]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -227,6 +227,9 @@ export default function App() {
       <article className="metric"><span>AGENT</span><strong className={data.agentV2?.killSwitchEnabled ? "text-danger" : data.agent?.enabled ? "text-good" : "text-warn"}>{data.agentV2?.killSwitchEnabled ? "Kill switch ON" : data.agent?.enabled ? "Enabled" : "Disabled"}</strong><small>{data.agentV2?.killSwitchEnabled ? "Payments stopped by server policy" : "Disabled by default · local testnet only"}</small></article>
       <article className="metric"><span>AUDIT INTEGRITY</span><strong className={data.audit?.valid ? "text-good" : "text-danger"}>{data.audit ? data.audit.valid ? "Verified" : "Failed" : "—"}</strong><small>{data.audit?.records ?? 0} local records · hash-chain check</small></article>
       <article className="metric"><span>HCS ANCHORING</span><strong>{data.anchors?.enabled ? "Enabled" : "Not enabled"}</strong><small>{data.anchors?.anchors.length ?? 0} locally indexed anchors</small></article>
+    </section>
+    <section className="panel wide-panel"><div className="panel-head"><div><p className="dash-kicker">00 / NETWORK MODE</p><h2>Choose payment network</h2></div><span className="chip good-chip">TESTNET ONLY</span></div>
+      <div className="policy-fields"><label>Selected network<select value={networkMode} onChange={e => { const next = e.target.value; if ((data.networks?.enabledNetworks ?? ["hedera:testnet"]).includes(next)) setNetworkMode(next); }}><option value="hedera:testnet">Hedera Testnet — enabled</option><option value="hedera:mainnet" disabled>Mainnet — disabled</option></select></label><div><strong>Mainnet readiness</strong><p className="panel-footnote">{data.networks?.mainnet.reason ?? "Mainnet is disabled by default. Readiness checks are not payment authorization."}</p><p className="panel-footnote">Mainnet payment execution: <strong>Disabled</strong>. The network mode is enforced by the API; a frontend selection cannot enable mainnet spending.</p></div></div>
     </section>
     <div className="content-grid">
       <section className="panel"><div className="panel-head"><div><p className="dash-kicker">01 / SPENDING FIREWALL</p><h2>Policy & limits</h2></div><span className="chip">ENFORCED BY API</span></div>
