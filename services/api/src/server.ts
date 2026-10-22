@@ -13,6 +13,7 @@ import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-tr
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import { claimTaskRun, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
+import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadinessChallenge, verifyMainnetReadinessChallenge, type MainnetReadinessInput } from "./mainnet-readiness.js";
 
 export const app = Fastify({
   logger: {
@@ -20,7 +21,7 @@ export const app = Fastify({
       paths: [
         "req.headers.authorization", "req.headers.cookie",
         "req.headers.x-heder1-authorization", "req.headers.x-heder1-payment-approval",
-        "req.headers.x-heder1-reconciliation-token", "req.headers.payment-signature",
+        "req.headers.x-heder1-reconciliation-token", "req.headers.x-heder1-mainnet-readiness", "req.headers.payment-signature",
       ],
       censor: "[REDACTED]",
     },
@@ -71,7 +72,7 @@ app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Allow-Origin", normalizedOrigin);
     reply.header("Vary", "Origin");
     reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, x-heder1-payment-approval, x-heder1-reconciliation-token, payment-signature");
+    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, x-heder1-payment-approval, x-heder1-reconciliation-token, x-heder1-mainnet-readiness, payment-signature");
     reply.header("Access-Control-Max-Age", "600");
   }
   if (request.method === "OPTIONS") return reply.code(204).send();
@@ -156,6 +157,116 @@ app.get("/api/x402/status", async (_request, reply) => {
 app.get("/api/x402/paid-resource", handlePaidResource);
 app.get("/api/x402/summary", handleShortSummaryResource);
 
+
+/**
+ * Phase 13 network selection and mainnet readiness. Mainnet payment execution is not
+ * implemented; these endpoints only run read-only checks and issue a quote-bound acknowledgement.
+ */
+app.get("/api/networks", async () => ({
+  selectedNetwork: "hedera:testnet",
+  enabledNetworks: ["hedera:testnet"],
+  mainnet: {
+    availableForReadinessReview: process.env.HEDERA_MAINNET_READINESS_ENABLED === "true",
+    paymentExecutionEnabled: false,
+    reason: process.env.HEDERA_MAINNET_READINESS_ENABLED === "true"
+      ? "Read-only mainnet readiness checks are enabled; payment execution remains disabled."
+      : "Mainnet is disabled by default. Configure HEDERA_MAINNET_READINESS_ENABLED=true for read-only checks only.",
+  },
+}));
+
+const mainnetReadinessSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["account","explicitOptIn","network","scheme","asset","assetDecimals","amount","maximumExposure","payerAccountId","destinationAccountId"],
+  properties: {
+    account: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+    explicitOptIn: { type: "boolean" },
+    network: { type: "string", enum: ["hedera:testnet","hedera:mainnet"] },
+    scheme: { type: "string", const: "exact" },
+    asset: { type: "string", pattern: "^0\\.0\\.\\d+$" },
+    assetDecimals: { type: "integer", minimum: 0, maximum: 18 },
+    amount: { type: "string", pattern: "^[1-9]\\d*$", maxLength: 80 },
+    maximumExposure: { type: "string", pattern: "^[1-9]\\d*$", maxLength: 80 },
+    payerAccountId: { type: "string", pattern: "^0\\.0\\.\\d+$" },
+    destinationAccountId: { type: "string", pattern: "^0\\.0\\.\\d+$" },
+  },
+} as const;
+
+function mainnetReadinessEnabled(reply: import("fastify").FastifyReply) {
+  if (process.env.HEDERA_MAINNET_READINESS_ENABLED === "true") return true;
+  reply.code(403).send({
+    error: "Mainnet readiness checks are disabled by default.",
+    hint: "Set HEDERA_MAINNET_READINESS_ENABLED=true to enable read-only readiness checks. This never enables payment execution.",
+    paymentExecutionEnabled: false,
+  });
+  return false;
+}
+
+app.post<{ Body: MainnetReadinessInput }>("/api/mainnet/readiness/check", {
+  schema: { body: mainnetReadinessSchema },
+}, async (request, reply) => {
+  if (!mainnetReadinessEnabled(reply)) return;
+  try {
+    const result = await checkMainnetReadiness(request.body);
+    await appendAuditEvent({ event: "mainnet.readiness_checked", outcome: result.readyForReadinessApproval ? "accepted" : "rejected", details: {
+      network: request.body.network, asset: request.body.asset, amount: request.body.amount,
+      maximumExposure: request.body.maximumExposure, facilitatorSupportsNetwork: result.facilitatorSupportsNetwork,
+      assetMetadataValidated: result.assetMetadataValidated, payerBalanceSufficient: result.payerBalanceSufficient,
+      destinationValidated: result.destinationValidated, blockerCount: result.blockers.length, paymentExecutionEnabled: false,
+    } });
+    return reply.code(result.readyForReadinessApproval ? 200 : 409).send(result);
+  } catch (error) {
+    return reply.code(503).send({ readyForReadinessApproval: false, paymentExecutionEnabled: false, error: error instanceof Error ? error.message : "Mainnet readiness check failed." });
+  }
+});
+
+app.post<{ Body: MainnetReadinessInput }>("/api/mainnet/readiness/challenge", {
+  schema: { body: mainnetReadinessSchema },
+}, async (request, reply) => {
+  if (!mainnetReadinessEnabled(reply)) return;
+  try {
+    const result = await checkMainnetReadiness(request.body);
+    if (!result.readyForReadinessApproval) {
+      await appendAuditEvent({ event: "mainnet.readiness_challenge_rejected", outcome: "rejected", details: { blockerCount: result.blockers.length, paymentExecutionEnabled: false } });
+      return reply.code(409).send({ error: "Resolve all readiness blockers before requesting a wallet acknowledgement.", result, paymentExecutionEnabled: false });
+    }
+    const challenge = await createMainnetReadinessChallenge(request.body, result);
+    await appendAuditEvent({ event: "mainnet.readiness_challenge_issued", outcome: "accepted", details: { account: challenge.account, scope: challenge.scope, expiresAt: challenge.expiresAt, paymentExecutionEnabled: false } });
+    return challenge;
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not create mainnet readiness challenge.", paymentExecutionEnabled: false });
+  }
+});
+
+app.post<{ Body: { nonce?: string; signature?: string } }>("/api/mainnet/readiness/verify", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["nonce","signature"], properties: {
+    nonce: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" },
+    signature: { type: "string", minLength: 130, maxLength: 132, pattern: "^0x[0-9a-fA-F]+$" },
+  } } },
+}, async (request, reply) => {
+  if (!mainnetReadinessEnabled(reply)) return;
+  try {
+    const grant = await verifyMainnetReadinessChallenge({ nonce: request.body.nonce!, signature: request.body.signature! });
+    await appendAuditEvent({ event: "mainnet.readiness_grant_issued", outcome: "accepted", details: { account: grant.account, scope: grant.scope, expiresAt: grant.expiresAt, singleUse: true, paymentExecutionEnabled: false } });
+    return grant;
+  } catch (error) {
+    return reply.code(401).send({ error: error instanceof Error ? error.message : "Mainnet readiness signature verification failed.", paymentExecutionEnabled: false });
+  }
+});
+
+/** Consumes only the separate readiness grant; it never authorizes a payment or transaction. */
+app.post("/api/mainnet/readiness/consume", async (request, reply) => {
+  if (!mainnetReadinessEnabled(reply)) return;
+  const token = request.headers["x-heder1-mainnet-readiness"];
+  try {
+    const grant = await consumeMainnetReadinessGrant(typeof token === "string" ? token : undefined);
+    if (!grant.allowed) return reply.code(401).send({ ...grant, paymentExecutionEnabled: false });
+    await appendAuditEvent({ event: "mainnet.readiness_grant_consumed", outcome: "accepted", details: { account: grant.account, scope: grant.scope, paymentExecutionEnabled: false } });
+    return { readinessAcknowledged: true, quote: grant.quote, result: grant.result, paymentExecutionEnabled: false, nextStep: "Operational review and a separate future payment-execution implementation are still required." };
+  } catch (error) {
+    return reply.code(503).send({ readinessAcknowledged: false, paymentExecutionEnabled: false, error: error instanceof Error ? error.message : "Could not consume readiness grant." });
+  }
+});
 
 /** Create a short-lived wallet-signing challenge. This endpoint never requests a transaction. */
 app.post<{ Body: { account?: string; chainId?: number; scope?: string; policy?: UserSpendingPolicy } }>("/api/authorization/challenge", {
