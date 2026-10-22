@@ -48,7 +48,8 @@ export function createAuthorizationChallenge(
     `Nonce: ${nonce}`,
     `Issued at: ${new Date(now).toISOString()}`,
     `Expires at: ${new Date(expiresAt).toISOString()}`,
-    `User spending policy: ${JSON.stringify(policy)}`,\n    "This approval authorizes one agent invocation only. It does not grant private-key access.",
+    `User spending policy: ${JSON.stringify(policy)}`,
+    "This approval authorizes one agent invocation only. It does not grant private-key access.",
   ].filter(Boolean).join("\n");
   challenges.set(nonce, { account, nonce, expiresAt, message, scope, policy });
   return { nonce, message, expiresAt: new Date(expiresAt).toISOString(), chainId: AUTHORIZATION_CHAIN_ID, scope };
