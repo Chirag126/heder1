@@ -227,7 +227,7 @@ export async function reconcilePostgresReservation(input: {
 }
 
 /** Recovery sweep: stale in-flight states become unknown, never automatically retried or released. */
-export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Promise<{ reservationsMarkedUnknown: number; tasksMarkedUnknown: number }> {
+export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Promise<{ reservationsMarkedUnknown: number; tasksMarkedUnknown: number; proofsMarkedUnknown: number }> {
   await importLegacyJsonLedger();
   const minutes = Math.max(1, Math.ceil(staleAfterMs / 60_000));
   return withDatabaseTransaction(async client => {
@@ -245,6 +245,13 @@ export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Prom
        RETURNING run_id`,
       [minutes],
     );
-    return { reservationsMarkedUnknown: reservations.rowCount ?? 0, tasksMarkedUnknown: tasks.rowCount ?? 0 };
+    const proofs = await client.query(
+      `UPDATE payment_proofs
+       SET status='unknown', error_code='stale_facilitator_call_requires_reconciliation', updated_at=now()
+       WHERE status='processing' AND updated_at < now() - ($1 * interval '1 minute')
+       RETURNING proof_hash`,
+      [minutes],
+    );
+    return { reservationsMarkedUnknown: reservations.rowCount ?? 0, tasksMarkedUnknown: tasks.rowCount ?? 0, proofsMarkedUnknown: proofs.rowCount ?? 0 };
   });
 }
