@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { databaseConfigured } from "./database.js";
-import { listPostgresReservations, reconcilePostgresReservation, reservePostgresSpend, transitionPostgresReservation } from "./postgres-spending-ledger.js";
+import { listPostgresReservations, reconcilePostgresReservation, recoverStalePostgresPayments, reservePostgresSpend, transitionPostgresReservation } from "./postgres-spending-ledger.js";
 
 export type ReservationStatus = "reserved" | "submitted" | "settled" | "rejected" | "failed" | "unknown" | "ambiguous";
 export type DurableReservation = {
@@ -193,4 +193,11 @@ export async function transitionDurableReservation(input: {
     await persist(path, ledger);
     return { updated: true as const, reservation };
   });
+}
+
+
+export async function recoverStaleDurableReservations(staleAfterMs = 120_000) {
+  if (databaseConfigured()) return recoverStalePostgresPayments(staleAfterMs);
+  if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for payment recovery in production.");
+  return { reservationsMarkedUnknown: 0, tasksMarkedUnknown: 0 };
 }
