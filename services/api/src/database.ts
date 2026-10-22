@@ -160,7 +160,7 @@ export async function saveGrantRecord(kind: AuthStateKind, token: string, wallet
   );
 }
 
-export async function consumeGrantRecord<T extends { scope?: string }>(kind: AuthStateKind, token: string, expectedScope?: string): Promise<T | undefined> {
+export async function consumeGrantRecord<T>(kind: AuthStateKind, token: string, expectedScope?: string): Promise<T | undefined> {
   return withDatabaseTransaction(async client => {
     const tokenHash = hashOpaqueToken(token);
     const result = await client.query(
@@ -175,7 +175,7 @@ export async function consumeGrantRecord<T extends { scope?: string }>(kind: Aut
     }
     const payload = row.payload as T;
     // A scope mismatch does not consume a valid grant; the caller still cannot use it on this endpoint.
-    if (expectedScope && payload.scope !== expectedScope) return undefined;
+    if (expectedScope && (payload as { scope?: string }).scope !== expectedScope) return undefined;
     await client.query("DELETE FROM auth_grants WHERE kind=$1 AND token_hash=$2", [kind, tokenHash]);
     return payload;
   });
