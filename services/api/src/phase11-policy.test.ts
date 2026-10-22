@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy, type PolicyQuote } from "./phase11-policy.js";
 
 const now = 1_800_000_000_000;
 const policy = (overrides: Partial<UserSpendingPolicy> = {}): UserSpendingPolicy => ({
@@ -8,7 +8,7 @@ const policy = (overrides: Partial<UserSpendingPolicy> = {}): UserSpendingPolicy
   expiresAt: now + 60_000,
   ...overrides,
 });
-const quote = (overrides: Record<string, unknown> = {}) => ({
+const quote = (overrides: Partial<PolicyQuote> = {}): PolicyQuote => ({
   serviceId: "heder1-short-summary",
   network: "hedera:testnet",
   asset: "0.0.0",
