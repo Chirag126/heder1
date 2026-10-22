@@ -88,7 +88,7 @@ test("Phase 10 status and run remain disabled by default", async () => {
   const status = await app.inject({ method: "GET", url: "/api/agent/v2/status" });
   assert.equal(status.statusCode, 200);
   assert.equal(status.json().enabled, false);
-  const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { goal: "Find the cheapest short report" } });
+  const run = await app.inject({ method: "POST", url: "/api/agent/v2/run", payload: { runId: "123e4567-e89b-12d3-a456-426614174000", goal: "Find the cheapest short report" } });
   assert.equal(run.statusCode, 403);
   assert.match(run.json().error, /disabled/);
 });
