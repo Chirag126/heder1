@@ -74,8 +74,10 @@ async function persist(path: string, ledger: Ledger) {
 }
 
 export async function reserveDurableSpend(input: {
-  amountTinybars: number; receiverAccountId: string; resourceUrl: string;
+  amountTinybars: number; receiverAccountId: string; resourceUrl: string; accountId?: string;
 }, options: { path?: string; now?: Date; dailyBudgetTinybars: number; maxAttemptsPerDay: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number }) {
+  if (databaseConfigured()) return reservePostgresSpend(input, options);
+  if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for payment reservations in production; refusing to use the local JSON ledger.");
   const path = pathFor(options.path);
   const now = options.now ?? new Date();
   const day = dayOf(now);
@@ -105,6 +107,8 @@ export async function reserveDurableSpend(input: {
 }
 
 export async function listDurableReservations(options: { path?: string; limit?: number } = {}) {
+  if (databaseConfigured()) return listPostgresReservations(options);
+  if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for reservation access in production.");
   const path = pathFor(options.path);
   return withLock(path, async () => {
     const ledger = await loadLedger(path);
@@ -117,6 +121,8 @@ export async function reconcileDurableReservation(input: {
   reservationId: string; outcome: "settled" | "failed" | "ambiguous";
   transactionId?: string; note: string;
 }, options: { path?: string; now?: Date } = {}) {
+  if (databaseConfigured()) return reconcilePostgresReservation(input);
+  if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required for reservation reconciliation in production.");
   const path = pathFor(options.path);
   const now = options.now ?? new Date();
   return withLock(path, async () => {
