@@ -23,8 +23,9 @@ Make Heder1's costs visible and bound task usage without adding a subscription s
 3. **Hedera network fee:** the Hedera x402 `exact` flow specifies that the facilitator pays/sponsors the settlement network fee. This applies only to supported x402 settlement; it does not pay the resource price, API hosting, database, monitoring, or model-provider bills.
 4. **Model inference:** zero for the current deterministic runner because it makes no LLM calls.
 5. **Hosting/infrastructure:** not allocated per task; costs are unknown until measured in the chosen deployment. The response explicitly reports this as unallocated, not $0.
+6. **Optional HCS audit anchoring:** a separate network operation that may incur operator costs when enabled; it is not included in the x402 resource-payment total and is disabled by default.
 
-HBAR amounts are reported in tinybars and HBAR. This release does not invent a USD conversion or a hosting-cost allocation. Registry hints are estimates only; live quotes and actual receipts take precedence.
+HBAR amounts are reported in tinybars and HBAR. This release does not invent a USD conversion or a hosting-cost allocation. Optional HCS anchoring costs are also reported separately rather than silently folded into resource costs. Registry hints are estimates only; live quotes and actual receipts take precedence.
 
 ## API examples
 
