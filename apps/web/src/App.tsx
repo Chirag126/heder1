@@ -56,6 +56,7 @@ export default function App() {
   const [taskWarnings, setTaskWarnings] = useState<string[]>([]);
   const [visibleAnchorCount, setVisibleAnchorCount] = useState(7);
   const [visibleRecordCount, setVisibleRecordCount] = useState(10);
+  const [sessionPaused, setSessionPaused] = useState(false);
   const [page, setPage] = useState<PageId>(() => {
     const route = window.location.hash.replace("#", "");
     return (["overview", "playground", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview";
@@ -150,6 +151,7 @@ export default function App() {
   async function authorize() {
     setBusy("authorize"); setError(""); setNotice(""); setToken("");
     try {
+      if (sessionPaused) throw new Error("New task authorizations are paused in this browser. Resume them in Spending & Permissions first.");
       if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect a wallet, verify Hedera Testnet, and approve the one-run consent first.");
       const challengeResponse = await fetch(apiUrl("/api/authorization/challenge"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: wallet, chainId: 296, scope: "heder1:agent-v2:bounded-task", policy: buildUserPolicy() }) });
       const challenge = await challengeResponse.json() as { nonce?: string; message?: string; error?: string };
@@ -190,6 +192,7 @@ export default function App() {
     let executionSubmitted = false;
     setBusy("agent"); setError(""); setNotice(""); setTaskReceipts([]); setTaskWarnings([]);
     try {
+      if (sessionPaused) throw new Error("New task runs are paused in this browser. Resume them in Spending & Permissions first.");
       if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect your wallet on Hedera Testnet and confirm consent before continuing.");
       if (agentMode === "preview") throw new Error("Preview mode never pays. Use the preview control to inspect quotes.");
       const policy = buildUserPolicy();
@@ -330,7 +333,7 @@ export default function App() {
         <div className="field-meta"><span>Use a specific, bounded request.</span><span>{taskGoal.length}/2000</span></div>
         <div className="playground-controls"><div><strong>Spending mode</strong><small>{agentMode === "preview" ? "Preview only — never signs or pays" : agentMode === "approval-required" ? "Wallet approval required for the exact quote" : "Bounded execution with a one-time policy grant"}</small></div><button className="button secondary" onClick={() => navigate("permissions")}>Review limits & permissions →</button></div>
         <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => { if (agentMode !== "preview") setAgentMode("preview"); void simulatePolicy(true); }}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
-          <button className="button secondary" disabled={Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled)} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : "Authorize & run task"}</button>
+          <button className="button secondary" disabled={sessionPaused || Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled)} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : "Authorize & run task"}</button>
         </div>
         {agentMode === "preview" && <p className="panel-footnote">Preview mode is the default. It performs quote discovery only: no funds are reserved and no payment is attempted.</p>}
       </section>
@@ -366,9 +369,10 @@ export default function App() {
           {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{policySimulation.allowed ? "Policy check passed" : "Policy check blocked"}</strong><span>{policySimulation.reason}</span></div>}
         </div>
       </section>
-      <section className="panel wide-panel"><div className="panel-head"><div><p className="dash-kicker">03 / AUTHORIZATION</p><h2>Authorize one bounded task</h2></div><span className={token ? "chip good-chip" : "chip"}>{token ? "ONE-TIME GRANT READY" : "EXPLICIT CONSENT REQUIRED"}</span></div>
+      <section className="panel wide-panel"><div className="panel-head"><div><p className="dash-kicker">03 / AUTHORIZATION</p><h2>Authorize one bounded task</h2></div><span className={sessionPaused ? "chip" : token ? "chip good-chip" : "chip"}>{sessionPaused ? "NEW RUNS PAUSED" : token ? "ONE-TIME GRANT READY" : "EXPLICIT CONSENT REQUIRED"}</span></div>
+        <div className={sessionPaused ? "pause-banner paused" : "pause-banner"}><div><strong>{sessionPaused ? "New runs are paused in this browser" : "Execution controls"}</strong><small>{sessionPaused ? "Resume when you are ready. This does not stop a task already submitted to the API." : "Pause here to block new runs from this browser session."}</small></div><button className={sessionPaused ? "button primary" : "button secondary"} onClick={() => { if (!sessionPaused) { setSessionPaused(true); setConsent(false); setNotice("New runs paused in this browser. This is not a server-wide kill switch; cancel any active task separately and check settlement status."); if (token) void revokeGrant(); } else { setSessionPaused(false); setNotice("Browser-side pause lifted. Review the policy and give consent again before running a task."); } }}>{sessionPaused ? "Resume new runs" : "Pause new runs"}</button></div>
         <label className="consent-row"><input type="checkbox" checked={consent} disabled={!wallet || !isTestnet || Boolean(busy)} onChange={event => setConsent(event.target.checked)} /><span>I understand this authorizes one bounded testnet task under the limits and allowlist above. My wallet signs a message; this is not a transaction signature by itself.</span></label>
-        <div className="action-row"><button className="button primary" onClick={() => void authorize()} disabled={!wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy) || agentMode === "approval-required" || allowedServiceIds.length === 0}>{busy === "authorize" ? "Waiting for wallet signature…" : token ? "Authorization ready" : "Sign one-time authorization"}</button>
+        <div className="action-row"><button className="button primary" onClick={() => void authorize()} disabled={sessionPaused || !wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy) || agentMode === "approval-required" || allowedServiceIds.length === 0}>{busy === "authorize" ? "Waiting for wallet signature…" : token ? "Authorization ready" : "Sign one-time authorization"}</button>
           {token && <button className="button secondary" onClick={() => void revokeGrant()} disabled={Boolean(busy)}>{busy === "revoke" ? "Revoking…" : "Revoke unused grant"}</button>}
           {busy === "agent" && activeRunId && <button className="button secondary" onClick={() => void cancelActiveRun()} disabled={cancelBusy}>{cancelBusy ? "Requesting cancellation…" : "Cancel active task"}</button>}
         </div>
