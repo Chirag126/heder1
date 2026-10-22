@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Wallet } from "ethers";
-import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, verifyAuthorizationChallenge } from "./authorization.js";
+import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 
 const wallet = new Wallet("0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
@@ -49,4 +49,28 @@ test("Phase 10 authorization is explicit, bounded, and cannot be consumed by the
   assert.equal(grant.scope, AUTHORIZATION_SCOPE_V2);
   assert.equal(consumeAuthorizationGrant(grant.authorizationToken, 4_000_002).allowed, false);
   assert.equal(consumeAuthorizationGrant(grant.authorizationToken, 4_000_002, AUTHORIZATION_SCOPE_V2).allowed, true);
+});
+
+test("Phase 11 signed policy is included in the wallet message and unused grants can be revoked", async () => {
+  const now = 5_000_000;
+  const policy = {
+    mode: "autonomous" as const,
+    network: "hedera:testnet" as const,
+    maxPaymentTinybars: 40_000,
+    taskBudgetTinybars: 100_000,
+    dailyBudgetTinybars: 200_000,
+    maxPaidCallsPerTask: 1,
+    maxPaidCallsPerDay: 2,
+    allowedServiceIds: ["heder1-short-summary"],
+    allowedAssets: ["0.0.0"],
+    expiresAt: now + 60_000,
+    approvalThresholdTinybars: 20_000,
+  };
+  const challenge = createAuthorizationChallenge(wallet.address, now, AUTHORIZATION_SCOPE_V2, policy);
+  assert.match(challenge.message, /"maxPaymentTinybars":40000/);
+  const signature = await wallet.signMessage(challenge.message);
+  const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature, now: now + 1 });
+  assert.equal(grant.policy.maxPaymentTinybars, 40_000);
+  assert.deepEqual(revokeAuthorizationGrant(grant.authorizationToken), { revoked: true });
+  assert.equal(consumeAuthorizationGrant(grant.authorizationToken, now + 2, AUTHORIZATION_SCOPE_V2).allowed, false);
 });
