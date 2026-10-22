@@ -20,6 +20,15 @@ Phase 12 replaces the production payment-state dependency on local JSON files an
 
 Set DATABASE_URL in the **API server environment only**. Do not expose it as a VITE_* variable, place it in frontend configuration, or commit it to Git. render.yaml declares it as a secret value that must be configured by the operator.
 
+After pulling Phase 12, install the newly added API dependencies from the repository root before running database-backed tests or builds:
+
+```powershell
+pnpm install
+pnpm --filter @heder1/api test
+pnpm typecheck
+pnpm build
+```
+
 Example local setup in WSL/Ubuntu:
 
 ```bash
@@ -33,7 +42,7 @@ The migration runner applies files in services/api/migrations/ under a PostgreSQ
 
 ### Local development compatibility
 
-When DATABASE_URL is absent and NODE_ENV is not production, the old JSON ledger and in-memory authorization state remain available for local tests and development. This fallback is **not multi-instance safe**. In production, reservation, challenge, grant, and reconciliation operations fail closed without DATABASE_URL; they do not silently fall back to local JSON or process memory.
+When DATABASE_URL is absent and NODE_ENV is not production, the old JSON ledger and in-memory authorization state remain available for local tests and development. The PostgreSQL driver is loaded lazily, so JSON-mode tests do not require the database driver at module-import time. Database-backed operations still require the `pg` package, installed by `pnpm install`. This fallback is **not multi-instance safe**. In production, reservation, challenge, grant, and reconciliation operations fail closed without DATABASE_URL; they do not silently fall back to local JSON or process memory.
 
 ### Legacy ledger migration
 
