@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–16 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Phase 15 adds a bounded, read-only Hedera Testnet account-context tool backed by the public Mirror Node API; Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies to avoid unnecessary migration risk. Phase 16 adds public pricing disclosure, bounded cost estimates, per-wallet daily task quotas, and receipt-based actual cost reports. The current runner is deterministic and does not call an LLM; hosted-agent billing and model-provider integration are deferred until actual operating costs and a model path are established. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
+> **Current status:** Phases 0–17 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Phase 15 adds a bounded, read-only Hedera Testnet account-context tool backed by the public Mirror Node API; Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies to avoid unnecessary migration risk. Phase 16 adds public pricing disclosure, bounded cost estimates, per-wallet daily task quotas, and receipt-based actual cost reports. The current runner is deterministic and does not call an LLM; hosted-agent billing and model-provider integration are deferred until actual operating costs and a model path are established. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
 
 ## Table of contents
 
@@ -31,6 +31,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 13: mainnet readiness gate](docs/PHASE-13.md)
 - [Phase 14: product UI and normal-user experience](docs/PHASE-14.md)\n- [Phase 15: optional Hedera integrations and read-only network tool](docs/PHASE-15.md)
 - [Phase 16: cost, pricing and sustainable service operation](docs/PHASE-16.md)
+- [Phase 17: production hardening and deployment reliability](docs/PHASE-17.md)
 - [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
@@ -59,6 +60,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Phase 13 network modes:** API-reported network availability, testnet-only execution, mainnet facilitator and Mirror Node checks, HBAR/HTS decimals and balance validation, maximum-exposure validation, and a separate short-lived wallet-signed readiness grant. Readiness never enables or executes a mainnet payment; see [docs/PHASE-13.md](docs/PHASE-13.md).
 
 - **Phase 16 cost disclosure:** See [docs/PHASE-16.md](docs/PHASE-16.md) for pricing endpoints, task quota configuration, cost categories, and deliberate deferrals.
+- **Phase 17 operational hardening:** API security headers, a PostgreSQL-aware readiness endpoint (`/api/health/ready`), and regression tests for origin rejection and readiness behavior. See [docs/PHASE-17.md](docs/PHASE-17.md). The JSONL audit chain is still not multi-instance-safe; this remains an explicit limitation.
 
 ## Architecture
 
