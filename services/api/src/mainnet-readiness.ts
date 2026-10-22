@@ -84,7 +84,7 @@ function isHttpsServiceUrl(value: string): boolean {
 function positiveIntegerString(value: string): boolean {
   return /^(0|[1-9]\d*)$/.test(value) && BigInt(value) > 0n;
 }
-function record(value: unknown): Record<string, unknown> | undefined {
+function asBigInt(value: unknown): bigint | undefined {\n  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);\n  if (typeof value === "string" && /^(0|[1-9]\\d*)$/.test(value)) { try { return BigInt(value); } catch { return undefined; } }\n  return undefined;\n}\nfunction record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
@@ -181,12 +181,12 @@ export async function checkMainnetReadiness(
       const payer = await jsonResponse(fetcher, `${mirrorNodeUrl}/api/v1/accounts/${encodeURIComponent(input.payerAccountId)}`);
       const balance = record(payer.balance);
       if (payer.account === input.payerAccountId && input.asset === "0.0.0") {
-        payerBalanceSufficient = typeof balance?.balance === "number" && positiveIntegerString(input.amount) && BigInt(balance.balance) >= BigInt(input.amount);
+        const currentBalance = asBigInt(balance?.balance);\n        payerBalanceSufficient = currentBalance !== undefined && positiveIntegerString(input.amount) && currentBalance >= BigInt(input.amount);
       } else if (payer.account === input.payerAccountId && input.asset !== "0.0.0") {
         const tokenResult = await jsonResponse(fetcher, `${mirrorNodeUrl}/api/v1/accounts/${encodeURIComponent(input.payerAccountId)}/tokens?token.id=${encodeURIComponent(input.asset)}`);
         const tokens = Array.isArray(tokenResult.tokens) ? tokenResult.tokens.map(record).filter(Boolean) : [];
         const token = tokens.find(item => item?.token_id === input.asset);
-        payerBalanceSufficient = typeof token?.balance === "number" && positiveIntegerString(input.amount) && BigInt(token.balance) >= BigInt(input.amount);
+        const currentBalance = asBigInt(token?.balance);\n        payerBalanceSufficient = currentBalance !== undefined && positiveIntegerString(input.amount) && currentBalance >= BigInt(input.amount);
       }
       if (payerBalanceSufficient) checks.push("Payer currently holds at least the quoted asset amount.");
       else blockers.push("Payer account does not exist or its current asset balance is insufficient.");
