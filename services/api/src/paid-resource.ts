@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { getX402Configuration } from "./x402.js";
 import { appendAuditEvent } from "./audit-trail.js";
+import { claimPaymentProof, databaseConfigured, finishPaymentProof } from "./database.js";
 
 type JsonRecord = Record<string, unknown>;
 type ServiceDefinition = {
@@ -67,13 +68,26 @@ async function readFacilitatorJson(response: Response, label: string): Promise<J
   return body;
 }
 
-async function settleOnce(key: string, paymentPayload: JsonRecord, requirements: ReturnType<typeof makeRequirements>, baseUrl: string) {
+async function settleOnce(key: string, paymentPayload: JsonRecord, requirements: ReturnType<typeof makeRequirements>, baseUrl: string, servicePath: string) {
   const existing = settled.get(key);
   if (existing) return existing;
   const pending = inFlight.get(key);
   if (pending) return pending;
 
   const work = (async () => {
+    let durableClaim = false;
+    let terminalRecorded = false;
+    if (databaseConfigured()) {
+      const claim = await claimPaymentProof(key, servicePath);
+      if (!claim.claimed) {
+        if (claim.status === "settled") return { transaction: claim.transactionId, settledAt: claim.settledAt };
+        throw new Error(`This payment proof is already ${claim.status}; it will not be submitted again. Reconcile the existing outcome before retrying.`);
+      }
+      durableClaim = true;
+    } else if (process.env.NODE_ENV === "production") {
+      throw new Error("DATABASE_URL is required for durable x402 proof replay protection in production.");
+    }
+    try {
     const body = JSON.stringify({ x402Version: 2, paymentPayload, paymentRequirements: requirements });
     const options = {
       method: "POST",
@@ -84,7 +98,12 @@ async function settleOnce(key: string, paymentPayload: JsonRecord, requirements:
     const verifyResponse = await fetch(`${baseUrl}/verify`, options);
     const verification = await readFacilitatorJson(verifyResponse, "Facilitator verification");
     if (verification.isValid !== true) {
-      throw new Error(typeof verification.invalidReason === "string" ? verification.invalidReason : "Facilitator rejected the payment proof.");
+      const reason = typeof verification.invalidReason === "string" ? verification.invalidReason : "Facilitator rejected the payment proof.";
+      if (durableClaim) {
+        await finishPaymentProof({ proofHash: key, status: "rejected", errorCode: "facilitator_rejected_proof" });
+        terminalRecorded = true;
+      }
+      throw new Error(reason);
     }
 
     const settleResponse = await fetch(`${baseUrl}/settle`, options);
@@ -93,8 +112,24 @@ async function settleOnce(key: string, paymentPayload: JsonRecord, requirements:
       throw new Error(typeof settlement.errorReason === "string" ? settlement.errorReason : "Facilitator did not confirm settlement with a transaction ID.");
     }
     const result = { transaction: settlement.transaction, settledAt: new Date().toISOString() };
+    if (durableClaim) {
+      await finishPaymentProof({
+        proofHash: key,
+        status: "settled",
+        transactionId: result.transaction,
+        settledAt: result.settledAt,
+        response: { servicePath, transactionId: result.transaction },
+      });
+      terminalRecorded = true;
+    }
     settled.set(key, result);
     return result;
+    } catch (error) {
+      if (durableClaim && !terminalRecorded) {
+        try { await finishPaymentProof({ proofHash: key, status: "unknown", errorCode: "facilitator_outcome_uncertain" }); } catch { /* recovery sweep will classify the stale claim; never retry automatically */ }
+      }
+      throw error;
+    }
   })();
 
   inFlight.set(key, work);
@@ -109,7 +144,10 @@ function makeHandler(service: ServiceDefinition) {
   return async function handleService(request: FastifyRequest, reply: FastifyReply) {
     let config;
     try {
-      config = getX402Configuration();
+      if (process.env.NODE_ENV === "production" && !databaseConfigured()) {
+      return reply.code(503).send({ error: "DATABASE_URL is required for durable payment-proof replay protection; payment is blocked." });
+    }
+    config = getX402Configuration();
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "Invalid payment configuration." });
     }
@@ -164,7 +202,7 @@ function makeHandler(service: ServiceDefinition) {
     const key = createHash("sha256").update(service.path).update("\0").update(paymentHeader).digest("hex");
     await appendAuditEvent({ event: "payment.attempted", outcome: "started", details: { proofHash: key, service: service.resource, amountTinybars: service.amountTinybars, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
     try {
-      const result = await settleOnce(key, paymentPayload, requirements, baseUrl);
+      const result = await settleOnce(key, paymentPayload, requirements, baseUrl, service.path);
       await appendAuditEvent({ event: "payment.settled", outcome: "settled", details: { proofHash: key, service: service.resource, transactionId: result.transaction, settledAt: result.settledAt, amountTinybars: service.amountTinybars, receiverAccountId: config.receiverAccountId, network: "hedera:testnet" } });
       return reply.header("payment-response", Buffer.from(JSON.stringify({ success: true, transaction: result.transaction, network: "hedera:testnet" })).toString("base64"))
         .header("cache-control", "no-store")
@@ -196,5 +234,5 @@ export const paidResourcePolicy = {
   amountHbar: "0.001",
   receiverAccountId: "configured-by-HEDERA_RECEIVER_ACCOUNT_ID",
   productionEnabled: false,
-  replayProtection: "in-memory idempotency keyed by resource path and payment proof; use durable storage before deployment",
+  replayProtection: "PostgreSQL atomic proof claims in production; in-memory idempotency is development-only",
 };
