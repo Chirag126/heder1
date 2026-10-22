@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–12 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
+> **Current status:** Phases 0–14 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate; Phase 14 adds separate guided product pages for overview, agent playground, spending and permissions, payments and receipts, and audit/HCS evidence. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
 
 ## Table of contents
 
@@ -29,6 +29,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
 - [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
 - [Phase 13: mainnet readiness gate](docs/PHASE-13.md)
+- [Phase 14: product UI and normal-user experience](docs/PHASE-14.md)
 - [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
@@ -43,6 +44,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **Wallet authorization:** verify a wallet-signed challenge and issue a short-lived, single-use authorization grant.
 - **Tamper-evident audit log:** link local JSONL records using a SHA-256 hash chain.
 - **HCS anchoring:** publish audit-record hashes to a Hedera Testnet topic and verify them against the public Mirror Node.
+- **Guided multi-page product UI (Phase 14):** separate Overview, Agent Playground, Spending & Permissions, Payments & Receipts, and Audit & HCS Evidence pages with mobile-friendly navigation, task quote comparison, allowlist controls, and clearer settlement warnings.
 - **Live dashboard:** display backend configuration, agent status, spending policies, audit history, and HCS evidence.
 - **Security-first defaults:** autonomous agent execution and the direct demo-payment endpoint are disabled by default.
 - **Phase 10 autonomous agent v2:** approved service registry, actual HTTP 402 price discovery, deterministic cheapest-service selection, bounded x402 payment execution, cancellation, and settlement receipts. A local live run completed; independent explorer/audit verification is documented in the Phase 10 evidence section.
