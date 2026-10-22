@@ -12,7 +12,7 @@ This document describes the user-defined policy and reservation work currently i
 - Conservative version-1 migration: old aggregate balances are retained as ambiguous legacy reservations, not silently released.
 - Operator-only reservation listing and settlement reconciliation endpoints.
 - Confirmed failure is the only reconciliation outcome that releases reserved budget. Ambiguous settlement retains its reservation. Settled outcomes require a transaction ID.
-- Task ID, task budget, and paid-call count are included in reservation accounting; the current task runner still intentionally executes at most one paid call per task.
+- Task ID, task budget, and paid-call count are included in reservation accounting. Autonomous mode can execute multiple eligible services sequentially, bounded by the signed policy and the persistent ledger; the dashboard defaults to two calls per task, with a hard maximum of three.
 
 ## API
 
@@ -66,7 +66,7 @@ The reconciliation API records an operator's decision; it does not independently
 
 ## Reservation storage and migration
 
-The default ledger path is `./data/spending-firewall.json`, configurable with `HEDERA_FIREWALL_LEDGER_PATH`. Version 2 records reservations, status, timestamps, transaction ID (when reconciled), and optional task ID. Writes use a temporary file plus rename while holding an exclusive lock directory. Lock acquisition times out and fails closed rather than permitting a payment.
+The default ledger path is `./data/spending-firewall.json`, configurable with `HEDERA_FIREWALL_LEDGER_PATH`. Version 2 records reservations, status, timestamps, transaction ID (when reconciled), and optional task ID. Writes use a unique temporary file plus rename while holding an exclusive lock directory. Lock acquisition times out and fails closed rather than permitting a payment. If a process crashes while holding a lock, the stale `.lock` directory may require operator inspection and removal after confirming no process is using it; never remove an active lock.
 
 Version-1 aggregate balances are migrated conservatively. Existing reserved balances become ambiguous legacy records, and are retained in the daily totals. They cannot be attributed to an individual payment, so review the ledger and reconcile carefully before any release.
 

@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–10 are implemented as a Hedera Testnet prototype. A local Phase 10 wallet-authorized run completed with a 0.0005 HBAR settlement; HashScan/Mirror Node and both matching HCS audit-anchor checks were verified for that recorded run. User policy, quote preview, quote-specific wallet approval APIs, and durable reservation/reconciliation operations are implemented on the feature branch described in the spending-policy guide. Public Render payment execution remains disabled. This is not production-ready payment infrastructure.
+> **Current status:** Phases 0–11 are implemented as a Hedera Testnet prototype. A local wallet-authorized run completed with a 0.0005 HBAR settlement; HashScan/Mirror Node and matching HCS audit-anchor checks were verified for that recorded run. Phase 11 adds user-defined spending policy, no-payment quote planning, quote-specific wallet approval, durable reservations, task/daily accounting, and settlement reconciliation. Controlled multi-service runs are now supported within the signed call and budget limits. Public Render payment execution remains disabled. This is not production-ready payment infrastructure.
 
 ## Table of contents
 
@@ -49,7 +49,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **No-payment quote planning:** inspect registered services' actual HTTP 402 quotes and return candidate prices, selected service, and rejection reasons without signing or reserving funds.
 - **Durable reservation ledger:** reservation IDs/status, atomic file replacement, exclusive local-filesystem locking, task-level budget/call accounting, conservative migration of older ledger balances, and operator-controlled settlement reconciliation. Ambiguous outcomes remain reserved.
 - **Operator reconciliation API:** protected by a server-only `HEDERA_RECONCILIATION_TOKEN`; records operator-confirmed settlement outcomes after independent HashScan/Mirror Node checks. It does not independently prove settlement.
-- **Quote-specific wallet approval:** a short-lived EIP-191 message binds the wallet approval to the exact service, network, asset, amount, receiver, policy, and expiry. The runner rediscovers the quote and fails closed if it changes. Backend endpoints are implemented; the guided dashboard flow remains to be integrated.
+- **Quote-specific wallet approval:** the dashboard obtains a fresh quote, shows the exact service/amount, requests an EIP-191 message signature, and executes only if the runner rediscovers the same service, network, asset, amount, receiver, and expiry. This is a message signature, not a transaction signature.\n- **Controlled multi-service tasks:** autonomous mode can pay multiple approved services sequentially, within the user-signed task/daily budgets, paid-call caps, step budget, kill switch, and per-payment reservation checks. Quote-specific approval remains one payment only.
 
 ## Architecture
 
@@ -471,7 +471,23 @@ The Blueprint sets the network to Hedera Testnet and keeps payment execution and
 - Confirm wallet authorization can only issue a grant; agent execution remains disabled in production.
 - Do not perform a live payment as part of the deployment smoke test.
 
-## Phase 11: user-defined spending policy\n\nPhase 11 extends the existing firewall and wallet authorization with a policy object bound to the wallet-signed challenge, a no-payment quote simulation endpoint, signed per-payment/task/daily caps, service and native-HBAR allowlists, grant revocation, and a server-side emergency kill switch. The approval-required runner mode fails closed until an explicit approval-and-resume workflow is implemented. Mainnet remains disabled. See [docs/PHASE-11.md](docs/PHASE-11.md).\n\n## Validation and testing
+## Phase 11: user-defined spending policy\n\nPhase 11 extends the existing firewall and wallet authorization with a policy object bound to the wallet-signed challenge, a no-payment quote simulation endpoint, signed per-payment/task/daily caps, service and native-HBAR allowlists, grant revocation, and a server-side emergency kill switch. The approval-required runner mode fails closed until an explicit approval-and-resume workflow is implemented. Mainnet remains disabled. See [docs/PHASE-11.md](docs/PHASE-11.md).\n\n## Phase 11: spending policy and payment authorization
+
+Phase 11 extends the existing Phase 3 spending firewall and Phase 10 runner rather than replacing them.
+
+- **Preview mode:** `POST /api/agent/v2/plan` discovers actual HTTP 402 quotes from registered local services. It does not reserve funds or sign.
+- **Autonomous mode:** runs within a short-lived wallet-signed policy; if a quote crosses the approval threshold, the dashboard asks for quote-specific wallet approval instead of silently proceeding.
+- **Approval-required mode:** each run requires a one-use wallet signature bound to the exact discovered quote.
+- **Durable reservation ledger:** reservations are recorded before payment signing/delivery, protected by an exclusive local-filesystem lock, written with atomic replacement, and migrated conservatively from the older aggregate ledger.
+- **Task accounting:** each payment reservation is bound to the run ID. The ledger enforces task budget and paid-call caps across all calls in that task, as well as daily budget and attempt caps.
+- **Settlement reconciliation:** validated receipts are marked settled in the ledger. Uncertain outcomes retain their reservation. Operators can inspect/reconcile reservations using the protected API described in [the operations guide](docs/SPENDING-POLICY.md).
+- **Revocation and emergency stop:** unused grants can be revoked, active tasks can be cancelled, and the server-side kill switch blocks execution.
+
+Hard limits remain: Hedera Testnet only; maximum 100,000 tinybars per payment, 500,000 tinybars per task, 1,000,000 tinybars per day, at most 3 paid calls per task and 10 per day. The UI defaults to fewer calls. Multi-service execution is sequential, not parallel, and only code-registered service URLs/native HBAR are accepted.
+
+The reservation ledger is safe only for processes sharing one host filesystem with working lock-directory semantics. It is not a distributed ledger or a multi-machine database. Public Render payment execution remains disabled. See [the spending policy, approval, and reconciliation guide](docs/SPENDING-POLICY.md) for API details and limitations.
+
+## Validation and testing
 
 Install dependencies first, then run the repository checks:
 

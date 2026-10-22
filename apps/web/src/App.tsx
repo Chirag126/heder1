@@ -36,10 +36,13 @@ export default function App() {
   const [taskBudgetTinybars, setTaskBudgetTinybars] = useState("200000");
   const [dailyBudgetTinybars, setDailyBudgetTinybars] = useState("500000");
   const [maxPaidCallsPerDay, setMaxPaidCallsPerDay] = useState("5");
+  const [maxPaidCallsPerTask, setMaxPaidCallsPerTask] = useState("2");
   const [approvalThresholdTinybars, setApprovalThresholdTinybars] = useState("50000");
   const [policySimulation, setPolicySimulation] = useState<{ allowed: boolean; requiresApproval?: boolean; reason: string } | null>(null);
   const [activeRunId, setActiveRunId] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [taskReceipts, setTaskReceipts] = useState<Array<{ serviceId: string; transactionId: string; explorerUrl: string; amountHbar: string }>>([]);
+  const [taskWarnings, setTaskWarnings] = useState<string[]>([]);
   const [visibleAnchorCount, setVisibleAnchorCount] = useState(7);
   const [visibleRecordCount, setVisibleRecordCount] = useState(10);
 
@@ -74,7 +77,7 @@ export default function App() {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const isTestnet = chain.toLowerCase() === CHAIN_ID;
-  const buildUserPolicy = () => ({ mode: agentMode, network: "hedera:testnet" as const, maxPaymentTinybars: Number(maxPaymentTinybars), taskBudgetTinybars: Number(taskBudgetTinybars), dailyBudgetTinybars: Number(dailyBudgetTinybars), maxPaidCallsPerTask: 1, maxPaidCallsPerDay: Number(maxPaidCallsPerDay), allowedServiceIds: ["heder1-full-report", "heder1-short-summary"], allowedAssets: ["0.0.0"], expiresAt: Date.now() + 120_000, approvalThresholdTinybars: Number(approvalThresholdTinybars) });
+  const buildUserPolicy = () => ({ mode: agentMode, network: "hedera:testnet" as const, maxPaymentTinybars: Number(maxPaymentTinybars), taskBudgetTinybars: Number(taskBudgetTinybars), dailyBudgetTinybars: Number(dailyBudgetTinybars), maxPaidCallsPerTask: Number(maxPaidCallsPerTask), maxPaidCallsPerDay: Number(maxPaidCallsPerDay), allowedServiceIds: ["heder1-full-report", "heder1-short-summary"], allowedAssets: ["0.0.0"], expiresAt: Date.now() + 120_000, approvalThresholdTinybars: Number(approvalThresholdTinybars) });
   async function simulatePolicy() {
     setBusy("simulate"); setError(""); setPolicySimulation(null);
     try {
@@ -151,7 +154,7 @@ export default function App() {
     finally { setCancelBusy(false); }
   }
   async function runAgent() {
-    setBusy("agent"); setError(""); setNotice("");
+    setBusy("agent"); setError(""); setNotice(""); setTaskReceipts([]); setTaskWarnings([]);
     try {
       if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect your wallet on Hedera Testnet and confirm consent before continuing.");
       if (agentMode === "preview") throw new Error("Preview mode never pays. Use the preview control to inspect quotes.");
@@ -180,10 +183,12 @@ export default function App() {
       const runId = crypto.randomUUID();
       setActiveRunId(runId);
       const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers, body: JSON.stringify({ runId, goal, budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
-      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ transactionId?: string; explorerUrl?: string }>; note?: string };
+      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string; amountHbar?: string }>; expenditure?: { reservedHbar?: string; paidCalls?: number }; warnings?: string[]; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
-      setNotice(`Agent ${result.status ?? "completed"}: ${result.selection?.serviceId ?? "approved service"} at ${result.selection?.amountHbar ?? "quoted price"} HBAR. Review the audit history and transaction receipt.`);
+      setNotice(`Agent ${result.status ?? "completed"}: ${result.receipts?.length ?? 1} payment(s), ${result.expenditure?.reservedHbar ?? result.selection?.amountHbar ?? "quoted price"} HBAR total. ${result.warnings?.join(" ") ?? ""} Review each transaction receipt and audit history.`);
+      setTaskReceipts((result.receipts ?? []).flatMap(receipt => receipt.transactionId && receipt.explorerUrl ? [{ serviceId: receipt.serviceId ?? "approved service", transactionId: receipt.transactionId, explorerUrl: receipt.explorerUrl, amountHbar: receipt.amountHbar ?? "unknown" }] : []));
+      setTaskWarnings(result.warnings ?? []);
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); await refresh(); }
     finally { setBusy(""); setActiveRunId(""); }
@@ -216,6 +221,7 @@ export default function App() {
     </section>
     {error && <div className="dash-alert error-alert" role="alert">{error}</div>}
     {notice && <div className="dash-alert success-alert" role="status">{notice}</div>}
+    {taskReceipts.length > 0 && <section className="panel wide-panel task-receipts" aria-label="Latest task receipts"><div className="panel-head"><div><p className="dash-kicker">LATEST TASK</p><h2>Payment receipts</h2></div><span className="chip good-chip">{taskReceipts.length} SETTLED</span></div><div className="limit-list">{taskReceipts.map((receipt, index) => <div key={receipt.transactionId}><span>{receipt.serviceId} · {receipt.amountHbar} HBAR</span><strong><a href={receipt.explorerUrl} target="_blank" rel="noreferrer">HashScan receipt #{index + 1} ↗</a></strong></div>)}</div>{taskWarnings.length > 0 && <div className="verify-result invalid" role="status"><strong>Task stopped with warnings</strong><span>{taskWarnings.join(" ")}</span></div>}</section>}
     <section className="metric-grid" aria-label="Live system status">
       <article className="metric"><span>NETWORK</span><strong>{data.x402?.network ?? "—"}</strong><small>{data.x402?.sdkConfigured ? "Payer configuration detected" : "Payer not configured"}</small></article>
       <article className="metric"><span>AGENT</span><strong className={data.agentV2?.killSwitchEnabled ? "text-danger" : data.agent?.enabled ? "text-good" : "text-warn"}>{data.agentV2?.killSwitchEnabled ? "Kill switch ON" : data.agent?.enabled ? "Enabled" : "Disabled"}</strong><small>{data.agentV2?.killSwitchEnabled ? "Payments stopped by server policy" : "Disabled by default · local testnet only"}</small></article>
@@ -233,7 +239,7 @@ export default function App() {
         <div className="user-policy-box">
           <strong>User spending policy</strong>
           <label>Mode<select value={agentMode} onChange={e => { setAgentMode(e.target.value as "preview" | "autonomous" | "approval-required"); setPolicySimulation(null); setToken(""); }}><option value="preview">Preview — no payment</option><option value="autonomous">Autonomous — within limits</option><option value="approval-required">Approval required — fail closed</option></select></label>
-          <div className="policy-fields"><label>Max payment (tinybars)<input inputMode="numeric" value={maxPaymentTinybars} onChange={e => { setMaxPaymentTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Task budget (tinybars)<input inputMode="numeric" value={taskBudgetTinybars} onChange={e => { setTaskBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily budget (tinybars)<input inputMode="numeric" value={dailyBudgetTinybars} onChange={e => { setDailyBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily paid-call cap<input inputMode="numeric" value={maxPaidCallsPerDay} onChange={e => { setMaxPaidCallsPerDay(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Approval threshold (tinybars)<input inputMode="numeric" value={approvalThresholdTinybars} onChange={e => { setApprovalThresholdTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label></div>
+          <div className="policy-fields"><label>Max payment (tinybars)<input inputMode="numeric" value={maxPaymentTinybars} onChange={e => { setMaxPaymentTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Task budget (tinybars)<input inputMode="numeric" value={taskBudgetTinybars} onChange={e => { setTaskBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily budget (tinybars)<input inputMode="numeric" value={dailyBudgetTinybars} onChange={e => { setDailyBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Paid calls per task (max 3)<input inputMode="numeric" value={maxPaidCallsPerTask} onChange={e => { setMaxPaidCallsPerTask(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily paid-call cap<input inputMode="numeric" value={maxPaidCallsPerDay} onChange={e => { setMaxPaidCallsPerDay(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Approval threshold (tinybars)<input inputMode="numeric" value={approvalThresholdTinybars} onChange={e => { setApprovalThresholdTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label></div>
           <p className="panel-footnote">Hard ceilings: 100,000 tinybars/payment, 500,000/task, 1,000,000/day. HBAR on Hedera Testnet and approved services only.</p>
           <div className="action-row"><button className="button secondary" onClick={() => void simulatePolicy()} disabled={Boolean(busy)}>{busy === "simulate" ? "Checking quotes…" : agentMode === "preview" ? "Preview registered services" : "Simulate 0.0005 HBAR quote"}</button></div>
           {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{agentMode === "preview" ? (policySimulation.allowed ? "Preview plan ready" : "No eligible quote") : policySimulation.allowed ? "Policy permits quote" : policySimulation.requiresApproval ? "Approval required" : "Quote blocked"}</strong><span>{policySimulation.reason}</span></div>}

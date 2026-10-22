@@ -18,6 +18,7 @@ type Ledger = { version: 1; entries: LedgerEntry[] };
 
 export type FirewallReservation = {
   allowed: true;
+  reservationId?: string;
   day: string;
   amountTinybars: string;
   reservedTodayTinybars: string;
