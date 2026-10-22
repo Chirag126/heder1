@@ -1,0 +1,186 @@
+import { createHash } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import pg, { type PoolClient } from "pg";
+
+const { Pool } = pg;
+let pool: InstanceType<typeof Pool> | undefined;
+let readyPromise: Promise<boolean> | undefined;
+
+export function databaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL?.trim());
+}
+
+/** A shared PostgreSQL pool. No database is silently fabricated when production has no DATABASE_URL. */
+export function getDatabasePool() {
+  if (!databaseConfigured()) return undefined;
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: Number(process.env.HEDER1_DB_POOL_MAX ?? 10),
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      application_name: "heder1-api",
+    });
+    pool.on("error", (error: Error) => {
+      // Do not log connection strings or query parameters.
+      console.error("heder1 PostgreSQL pool error:", error.message);
+    });
+  }
+  return pool;
+}
+
+export async function ensureDatabaseReady(): Promise<boolean> {
+  const db = getDatabasePool();
+  if (!db) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("DATABASE_URL is required in production; refusing to use process-local payment state.");
+    }
+    return false;
+  }
+  if (!readyPromise) {
+    readyPromise = (async () => {
+      const client = await db.connect();
+      try {
+        await client.query("SELECT pg_advisory_lock($1)", [72120412]);
+        await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+        const migrationDirectory = await findMigrationDirectory();
+        const migrations = (await readdir(migrationDirectory)).filter(name => /^\d+_[a-z0-9_-]+\.sql$/i.test(name)).sort();
+        for (const name of migrations) {
+          const alreadyApplied = await client.query("SELECT 1 FROM schema_migrations WHERE version = $1", [name]);
+          if (alreadyApplied.rowCount) continue;
+          const sql = await readFile(resolve(migrationDirectory, name), "utf8");
+          await client.query("BEGIN");
+          try {
+            await client.query(sql);
+            await client.query("INSERT INTO schema_migrations(version) VALUES ($1)", [name]);
+            await client.query("COMMIT");
+          } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+          }
+        }
+        return true;
+      } finally {
+        try { await client.query("SELECT pg_advisory_unlock($1)", [72120412]); } catch { /* connection may already be lost */ }
+        client.release();
+      }
+    })().catch(error => {
+      readyPromise = undefined;
+      throw error;
+    });
+  }
+  return readyPromise;
+}
+
+async function findMigrationDirectory(): Promise<string> {
+  const candidates = [resolve(process.cwd(), "services/api/migrations"), resolve(process.cwd(), "migrations")];
+  for (const candidate of candidates) {
+    try { await readdir(candidate); return candidate; } catch { /* try next supported working directory */ }
+  }
+  throw new Error("Database migrations directory is missing; refusing to start database-backed payment operations.");
+}
+
+export async function withDatabaseTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (!await ensureDatabaseReady()) throw new Error("A configured PostgreSQL database is required for this operation.");
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is not configured.");
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* preserve the original error */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function ensureUser(walletAddress: string): Promise<string> {
+  const normalized = walletAddress.toLowerCase();
+  await ensureDatabaseReady();
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is required to persist user state.");
+  await db.query(
+    "INSERT INTO users(wallet_address) VALUES ($1) ON CONFLICT(wallet_address) DO UPDATE SET updated_at = now()",
+    [normalized],
+  );
+  return normalized;
+}
+
+export function hashOpaqueToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+export async function savePolicyVersion(walletAddress: string, policy: unknown): Promise<void> {
+  const normalized = await ensureUser(walletAddress);
+  const serialized = JSON.stringify(policy);
+  const policyHash = createHash("sha256").update(serialized).digest("hex");
+  const db = getDatabasePool();
+  if (!db) throw new Error("PostgreSQL is required to persist policy versions.");
+  await db.query(
+    "INSERT INTO policy_versions(wallet_address, policy_hash, policy) VALUES ($1,$2,$3::jsonb) ON CONFLICT(wallet_address, policy_hash) DO NOTHING",
+    [normalized, policyHash, serialized],
+  );
+}
+
+export async function consumeRateLimit(key: string, limit: number, windowMs: number): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number }> {
+  const normalizedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+  const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
+  if (await ensureDatabaseReady()) {
+    const db = getDatabasePool()!;
+    const result = await db.query(
+      `INSERT INTO api_rate_limits(bucket_key, window_started_at, request_count)
+       VALUES ($1, now(), 1)
+       ON CONFLICT(bucket_key) DO UPDATE SET
+         request_count = CASE WHEN api_rate_limits.window_started_at <= now() - ($2 * interval '1 second') THEN 1 ELSE api_rate_limits.request_count + 1 END,
+         window_started_at = CASE WHEN api_rate_limits.window_started_at <= now() - ($2 * interval '1 second') THEN now() ELSE api_rate_limits.window_started_at END,
+         updated_at = now()
+       RETURNING request_count, GREATEST(0, CEIL(EXTRACT(EPOCH FROM (window_started_at + ($2 * interval '1 second') - now())))::integer) AS retry_after_seconds`,
+      [key, windowSeconds],
+    );
+    const count = Number(result.rows[0].request_count);
+    const retryAfterSeconds = Number(result.rows[0].retry_after_seconds);
+    return { allowed: count <= normalizedLimit, remaining: Math.max(0, normalizedLimit - count), retryAfterSeconds };
+  }
+  // Development/test fallback only. Production requires PostgreSQL above.
+  const now = Date.now();
+  const entry = localRateLimits.get(key);
+  const current = !entry || now - entry.startedAt >= windowMs ? { startedAt: now, count: 0 } : entry;
+  current.count += 1;
+  localRateLimits.set(key, current);
+  return { allowed: current.count <= normalizedLimit, remaining: Math.max(0, normalizedLimit - current.count), retryAfterSeconds: Math.max(1, Math.ceil((current.startedAt + windowMs - now) / 1000)) };
+}
+const localRateLimits = new Map<string, { startedAt: number; count: number }>();
+
+export async function claimTaskRun(input: { runId: string; walletAddress: string; idempotencyKey: string; requestHash: string }): Promise<boolean> {
+  const wallet = await ensureUser(input.walletAddress);
+  const db = getDatabasePool();
+  if (!db) return true;
+  const result = await db.query(
+    `INSERT INTO task_runs(run_id, wallet_address, idempotency_key, request_hash, status)
+     VALUES ($1,$2,$3,$4,'quoted')
+     ON CONFLICT DO NOTHING RETURNING run_id`,
+    [input.runId, wallet, input.idempotencyKey, input.requestHash],
+  );
+  return Boolean(result.rowCount);
+}
+
+export async function updateTaskRun(runId: string, walletAddress: string, status: "quoted"|"reserved"|"submitted"|"settled"|"rejected"|"failed"|"unknown", response?: unknown, errorCode?: string): Promise<void> {
+  const wallet = await ensureUser(walletAddress);
+  const db = getDatabasePool();
+  if (!db) return;
+  await db.query(
+    "UPDATE task_runs SET status=$3, response=$4::jsonb, error_code=$5, updated_at=now() WHERE run_id=$1 AND wallet_address=$2",
+    [runId, wallet, status, response === undefined ? null : JSON.stringify(response), errorCode ?? null],
+  );
+}
+
+export async function closeDatabasePool(): Promise<void> {
+  if (pool) await pool.end();
+  pool = undefined;
+  readyPromise = undefined;
+}
