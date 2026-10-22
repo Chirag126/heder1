@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy, type PolicyQuote } from "./phase11-policy.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy, type PolicyQuote } from "./spending-policy.js";
 
 const now = 1_800_000_000_000;
 const policy = (overrides: Partial<UserSpendingPolicy> = {}): UserSpendingPolicy => ({

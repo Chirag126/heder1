@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { reserveDurableSpend } from "./spending-ledger.js";
 
 export const FIREWALL_MAX_PAYMENT_TINYBARS = 100_000;
 export const FIREWALL_DAILY_BUDGET_TINYBARS = 1_000_000;
@@ -89,50 +90,16 @@ export async function reserveAgentSpend(
     return { allowed: false, reason: "Resource or receiver is not on the spending firewall allowlist." };
   }
 
-  const path = ledgerPath(options.path);
-  const now = options.now ?? new Date();
-  const day = utcDay(now);
-
-  let release!: () => void;
-  const previous = writeQueue;
-  writeQueue = new Promise<void>((resolveQueue) => { release = resolveQueue; });
-  await previous;
-
-  try {
-    const ledger = await readLedger(path);
-    const today = ledger.entries.find((entry) => entry.day === day) ?? {
-      day, reservedTinybars: 0, attempts: 0, updatedAt: now.toISOString(),
-    };
-
-    if (today.attempts >= FIREWALL_MAX_ATTEMPTS_PER_DAY) {
-      return { allowed: false, reason: "Daily payment-attempt limit reached." };
-    }
-    if (today.reservedTinybars + amount > FIREWALL_DAILY_BUDGET_TINYBARS) {
-      return { allowed: false, reason: "Daily spending budget would be exceeded." };
-    }
-
-    today.reservedTinybars += amount;
-    today.attempts += 1;
-    today.updatedAt = now.toISOString();
-    const entries = ledger.entries.filter((entry) => entry.day !== day);
-    entries.push(today);
-    const updated: Ledger = { version: 1, entries };
-    await mkdir(dirname(path), { recursive: true });
-    const tempPath = `${path}.${process.pid}.tmp`;
-    await writeFile(tempPath, JSON.stringify(updated, null, 2), { encoding: "utf8", mode: 0o600 });
-    await rename(tempPath, path);
-
-    return {
-      allowed: true,
-      day,
-      amountTinybars: String(amount),
-      reservedTodayTinybars: String(today.reservedTinybars),
-      attemptsToday: today.attempts,
-      dailyBudgetTinybars: String(FIREWALL_DAILY_BUDGET_TINYBARS),
-    };
-  } finally {
-    release();
-  }
+  return reserveDurableSpend({
+    amountTinybars: amount,
+    receiverAccountId: input.receiverAccountId,
+    resourceUrl: input.resourceUrl,
+  }, {
+    path: options.path,
+    now: options.now,
+    dailyBudgetTinybars: FIREWALL_DAILY_BUDGET_TINYBARS,
+    maxAttemptsPerDay: FIREWALL_MAX_ATTEMPTS_PER_DAY,
+  });
 }
 
 
@@ -143,7 +110,7 @@ export async function reserveAgentSpend(
  */
 export async function reserveAgentV2Spend(
   input: { amountTinybars: string; receiverAccountId: string; resourceUrl: string },
-  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number } = {},
+  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number } = {},
 ): Promise<FirewallReservation> {
   const amount = Number(input.amountTinybars);
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > Math.min(FIREWALL_MAX_PAYMENT_TINYBARS, options.maxPaymentTinybars ?? FIREWALL_MAX_PAYMENT_TINYBARS)) {
@@ -160,38 +127,18 @@ export async function reserveAgentV2Spend(
     return { allowed: false, reason: "Phase 10 service or receiver is not on the explicit spending firewall allowlist." };
   }
 
-  const path = ledgerPath(options.path);
-  const now = options.now ?? new Date();
-  const day = utcDay(now);
-  let release!: () => void;
-  const previous = writeQueue;
-  writeQueue = new Promise<void>((resolveQueue) => { release = resolveQueue; });
-  await previous;
-  try {
-    const ledger = await readLedger(path);
-    const today = ledger.entries.find((entry) => entry.day === day) ?? {
-      day, reservedTinybars: 0, attempts: 0, updatedAt: now.toISOString(),
-    };
-    if (today.attempts >= Math.min(FIREWALL_MAX_ATTEMPTS_PER_DAY, options.maxAttemptsPerDay ?? FIREWALL_MAX_ATTEMPTS_PER_DAY)) return { allowed: false, reason: "Daily payment-attempt limit reached." };
-    if (today.reservedTinybars + amount > Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS)) return { allowed: false, reason: "Daily spending budget would be exceeded." };
-    today.reservedTinybars += amount;
-    today.attempts += 1;
-    today.updatedAt = now.toISOString();
-    const entries = ledger.entries.filter((entry) => entry.day !== day);
-    entries.push(today);
-    await mkdir(dirname(path), { recursive: true });
-    const tempPath = `${path}.${process.pid}.tmp`;
-    await writeFile(tempPath, JSON.stringify({ version: 1, entries } satisfies Ledger, null, 2), { encoding: "utf8", mode: 0o600 });
-    await rename(tempPath, path);
-    return {
-      allowed: true,
-      day,
-      amountTinybars: String(amount),
-      reservedTodayTinybars: String(today.reservedTinybars),
-      attemptsToday: today.attempts,
-      dailyBudgetTinybars: String(Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS)),
-    };
-  } finally {
-    release();
-  }
+  const result = await reserveDurableSpend({
+    amountTinybars: amount,
+    receiverAccountId: input.receiverAccountId,
+    resourceUrl: input.resourceUrl,
+  }, {
+    path: options.path,
+    now: options.now,
+    dailyBudgetTinybars: Math.min(FIREWALL_DAILY_BUDGET_TINYBARS, options.dailyBudgetTinybars ?? FIREWALL_DAILY_BUDGET_TINYBARS),
+    maxAttemptsPerDay: Math.min(FIREWALL_MAX_ATTEMPTS_PER_DAY, options.maxAttemptsPerDay ?? FIREWALL_MAX_ATTEMPTS_PER_DAY),
+    taskId: options.taskId,
+    taskBudgetTinybars: options.taskBudgetTinybars,
+    maxPaidCallsPerTask: options.maxPaidCallsPerTask,
+  });
+  return result;
 }

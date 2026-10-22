@@ -1,14 +1,17 @@
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
-import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
+import { isAgentV2Enabled, previewAgentV2Plan, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
+import { listDurableReservations, reconcileDurableReservation } from "./spending-ledger.js";
+import { consumePaymentApproval, createPaymentApprovalChallenge, verifyPaymentApproval, type ApprovedPaymentQuote } from "./payment-approval.js";
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
-import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 
 export const app = Fastify({ logger: true, bodyLimit: 16_384 });
 const port = Number(process.env.PORT ?? 4000);
@@ -34,7 +37,7 @@ app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Allow-Origin", normalizedOrigin);
     reply.header("Vary", "Origin");
     reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, payment-signature");
+    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, x-heder1-payment-approval, x-heder1-reconciliation-token, payment-signature");
     reply.header("Access-Control-Max-Age", "600");
   }
   if (request.method === "OPTIONS") return reply.code(204).send();
@@ -258,6 +261,92 @@ app.get("/api/agent/v2/services", async () => ({
   note: "Price metadata is informational only. The runner inspects each service's actual HTTP 402 requirements before selecting.",
 }));
 
+type PreviewPlanBody = { goal?: string; policy?: UserSpendingPolicy; budgetTinybars?: number };
+app.post<{ Body: PreviewPlanBody }>("/api/agent/v2/plan", async (request, reply) => {
+  const body = request.body;
+  if (typeof body?.goal !== "string" || !body.goal.trim() || body.goal.length > 2_000) return reply.code(400).send({ error: "goal is required and must be at most 2000 characters." });
+  if (body.budgetTinybars !== undefined && (typeof body.budgetTinybars !== "number" || !Number.isSafeInteger(body.budgetTinybars) || body.budgetTinybars <= 0)) return reply.code(400).send({ error: "budgetTinybars must be a positive safe integer." });
+  const policy = body.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, mode: "preview" as const, expiresAt: Date.now() + 120_000 };
+  try { return await previewAgentV2Plan({ goal: body.goal, policy, budgetTinybars: body.budgetTinybars }); }
+  catch (error) { return reply.code(400).send({ paymentAttempted: false, error: error instanceof Error ? error.message : "Could not create a preview plan." }); }
+});
+
+type PaymentApprovalChallengeBody = {
+  account?: string;
+  policy?: UserSpendingPolicy;
+  quote?: { serviceId?: string; network?: string; asset?: string; amountTinybars?: number; receiverAccountId?: string };
+};
+app.post<{ Body: PaymentApprovalChallengeBody }>("/api/agent/v2/approval/challenge", async (request, reply) => {
+  const body = request.body;
+  const q = body?.quote;
+  if (typeof body?.account !== "string" || !body.policy || !q ||
+      typeof q.serviceId !== "string" || typeof q.network !== "string" ||
+      typeof q.asset !== "string" || typeof q.amountTinybars !== "number" ||
+      typeof q.receiverAccountId !== "string") {
+    return reply.code(400).send({ error: "account, policy, and exact quote fields are required." });
+  }
+  try {
+    const challenge = createPaymentApprovalChallenge({
+      account: body.account,
+      policy: body.policy,
+      quote: { serviceId: q.serviceId, network: q.network, asset: q.asset, amountTinybars: q.amountTinybars, receiverAccountId: q.receiverAccountId },
+    });
+    await appendAuditEvent({ event: "authorization.challenge_issued", outcome: "accepted", details: { action: "payment_approval_challenge", account: challenge.account, serviceId: q.serviceId, amountTinybars: q.amountTinybars, expiresAt: challenge.expiresAt } });
+    return challenge;
+  } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not create payment approval challenge." }); }
+});
+
+app.post<{ Body: { nonce?: string; signature?: string } }>("/api/agent/v2/approval/verify", async (request, reply) => {
+  if (typeof request.body?.nonce !== "string" || typeof request.body?.signature !== "string") return reply.code(400).send({ error: "nonce and wallet signature are required." });
+  try {
+    const approval = await verifyPaymentApproval({ nonce: request.body.nonce, signature: request.body.signature });
+    await appendAuditEvent({ event: "authorization.grant_issued", outcome: "accepted", details: { action: "quote_specific_payment_approval", account: approval.account, serviceId: approval.quote.serviceId, amountTinybars: approval.quote.amountTinybars, expiresAt: approval.expiresAt, singleUse: true } });
+    return approval;
+  } catch (error) { return reply.code(401).send({ error: error instanceof Error ? error.message : "Payment approval verification failed." }); }
+});
+
+type ReconciliationBody = { reservationId?: string; outcome?: "settled" | "failed" | "ambiguous"; transactionId?: string; note?: string };
+function reconciliationAuthorized(token: unknown): boolean {
+  const expected = process.env.HEDERA_RECONCILIATION_TOKEN;
+  if (!expected || typeof token !== "string") return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Operator-only reservation ledger view. Requires HEDERA_RECONCILIATION_TOKEN. */
+app.get<{ Querystring: { limit?: string } }>("/api/agent/v2/reservations", async (request, reply) => {
+  if (!reconciliationAuthorized(request.headers["x-heder1-reconciliation-token"])) return reply.code(403).send({ error: "Reservation ledger access is not configured or authorized." });
+  const limit = Number(request.query.limit ?? 100);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) return reply.code(400).send({ error: "limit must be an integer from 1 to 500." });
+  try { return { reservations: await listDurableReservations({ limit }) }; }
+  catch (error) { return reply.code(500).send({ error: error instanceof Error ? error.message : "Could not read reservation ledger." }); }
+});
+
+/**
+ * Operator-confirmed reconciliation only. Verify HashScan/Mirror Node evidence first.
+ * An ambiguous outcome never releases reserved budget; only a confirmed failure does.
+ */
+app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", async (request, reply) => {
+  if (!reconciliationAuthorized(request.headers["x-heder1-reconciliation-token"])) return reply.code(403).send({ error: "Reservation reconciliation is not configured or authorized." });
+  const body = request.body;
+  if (typeof body?.reservationId !== "string" || !["settled", "failed", "ambiguous"].includes(String(body.outcome)) || typeof body.note !== "string" || !body.note.trim()) {
+    return reply.code(400).send({ updated: false, error: "reservationId, outcome (settled|failed|ambiguous), and an operator note are required." });
+  }
+  if (body.note.length > 500) return reply.code(400).send({ updated: false, error: "note must be at most 500 characters." });
+  try {
+    const result = await reconcileDurableReservation({
+      reservationId: body.reservationId,
+      outcome: body.outcome as "settled" | "failed" | "ambiguous",
+      transactionId: body.transactionId,
+      note: body.note,
+    });
+    if (!result.updated) return reply.code(409).send(result);
+    await appendAuditEvent({ event: "agent.run_finished", outcome: body.outcome === "failed" ? "failed" : "accepted", details: { phase: "11", action: "reservation_reconciled", reservationId: body.reservationId, outcome: body.outcome ?? "ambiguous", transactionId: body.transactionId ?? null } });
+    return result;
+  } catch (error) { return reply.code(500).send({ updated: false, error: error instanceof Error ? error.message : "Could not reconcile reservation." }); }
+});
+
 app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", async (request, reply) => {
   if (!isAgentV2Enabled()) {
     return reply.code(403).send({ error: "Agent v2 is disabled.", hint: "For local testnet testing only, set HEDERA_AGENT_V2_ENABLED=true and HEDERA_NETWORK=testnet. Never enable payment execution on public Render." });
@@ -271,16 +360,28 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", a
   if (input.maxPaidCalls !== undefined && typeof input.maxPaidCalls !== "number") return reply.code(400).send({ error: "maxPaidCalls must be a number." });
   if (input.allowedServiceIds !== undefined && (!Array.isArray(input.allowedServiceIds) || !input.allowedServiceIds.every((id) => typeof id === "string"))) return reply.code(400).send({ error: "allowedServiceIds must be an array of registered service IDs." });
   const token = request.headers["x-heder1-authorization"];
-  const authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
+  const approvalHeader = request.headers["x-heder1-payment-approval"];
+  let approvedQuote: ApprovedPaymentQuote | undefined;
+  let authorization: ReturnType<typeof consumeAuthorizationGrant>;
+  if (typeof approvalHeader === "string") {
+    const approved = consumePaymentApproval(approvalHeader);
+    if (!approved.allowed) authorization = approved;
+    else {
+      approvedQuote = approved.quote;
+      authorization = { allowed: true, account: approved.account, scope: AUTHORIZATION_SCOPE_V2, policy: approved.policy };
+    }
+  } else {
+    authorization = consumeAuthorizationGrant(typeof token === "string" ? token : undefined, Date.now(), AUTHORIZATION_SCOPE_V2);
+  }
   if (!authorization.allowed) {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
-    return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization first." });
+    return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization or quote-specific payment approval first." });
   }
   const controller = new AbortController();
   agentV2Runs.set(runId, controller);
   try {
     await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "10", runId, account: authorization.account, scope: authorization.scope } });
-    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId });
+    const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId, approvedQuote });
     await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "10", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
     return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { getAddress, verifyMessage } from "ethers";
-import { DEFAULT_USER_SPENDING_POLICY, validateUserSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
+import { DEFAULT_USER_SPENDING_POLICY, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 
 export const AUTHORIZATION_TTL_MS = 2 * 60 * 1000;
 export const AUTHORIZATION_CHAIN_ID = 296;

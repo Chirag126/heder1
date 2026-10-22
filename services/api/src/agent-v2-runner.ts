@@ -5,7 +5,8 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
-import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, type UserSpendingPolicy } from "./phase11-policy.js";
+import type { ApprovedPaymentQuote } from "./payment-approval.js";
+import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import {
   DEFAULT_AGENT_V2_LIMITS,
   getApprovedServiceRegistry,
@@ -58,6 +59,75 @@ function amountHbar(tinybars: number): string {
   return (tinybars / 100_000_000).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+export type AgentV2PreviewInput = { goal: string; policy?: UserSpendingPolicy; budgetTinybars?: number };
+
+export async function previewAgentV2Plan(input: AgentV2PreviewInput) {
+  const policy = input.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, mode: "preview" as const, expiresAt: Date.now() + 120_000 };
+  const policyErrors = validateUserSpendingPolicy(policy);
+  if (policyErrors.length) throw new Error(policyErrors.join(" "));
+  if (!input.goal.trim() || input.goal.length > 2_000) throw new Error("Goal is required and must be at most 2000 characters.");
+  if (policy.expiresAt <= Date.now()) throw new Error("Policy expired; request a fresh wallet-signed policy.");
+  const budget = Math.min(policy.taskBudgetTinybars, input.budgetTinybars ?? policy.taskBudgetTinybars);
+  if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("Preview budget must be a positive safe integer.");
+  const registry = getApprovedServiceRegistry().filter(service => service.allowed && service.trust === "approved" && policy.allowedServiceIds.includes(service.id));
+  const requirementsByService = new Map<string, ReturnType<typeof parseX402Requirements>>();
+  const checks: Array<{ serviceId: string; status: "quoted" | "no-quote" | "rejected"; amountTinybars?: number; reason: string }> = [];
+  let httpCalls = 0;
+  for (const service of registry) {
+    if (!isSafeRegisteredUrl(service.url)) {
+      checks.push({ serviceId: service.id, status: "rejected", reason: "Registered URL failed the local endpoint safety check." });
+      requirementsByService.set(service.id, []);
+      continue;
+    }
+    try {
+      const response = await fetch(service.url, { method: "GET", redirect: "error", signal: AbortSignal.timeout(8_000), headers: { accept: "application/json" } });
+      httpCalls += 1;
+      if (response.status !== 402) {
+        requirementsByService.set(service.id, []);
+        checks.push({ serviceId: service.id, status: "no-quote", reason: `Service returned HTTP ${response.status}, not a payment quote.` });
+        continue;
+      }
+      const body: unknown = await response.json().catch(() => null);
+      const requirements = parseX402Requirements(parseChallenge(response, body));
+      requirementsByService.set(service.id, requirements);
+      const valid = requirements.filter(r => r.scheme === "exact" && r.network === policy.network && policy.allowedAssets.includes(r.asset) && r.asset === "0.0.0" && Number.isSafeInteger(Number(r.amount)) && Number(r.amount) > 0 && Number(r.amount) <= policy.maxPaymentTinybars && Number(r.amount) <= budget);
+      const cheapest = valid.sort((a,b) => Number(a.amount)-Number(b.amount))[0];
+      checks.push(cheapest
+        ? { serviceId: service.id, status: "quoted", amountTinybars: Number(cheapest.amount), reason: "Quote fits the per-payment, asset, network, and budget limits; approval is still required before payment." }
+        : { serviceId: service.id, status: "rejected", reason: "No quote fits the signed network, asset, per-payment cap, and task budget." });
+    } catch (error) {
+      requirementsByService.set(service.id, []);
+      checks.push({ serviceId: service.id, status: "rejected", reason: error instanceof Error ? error.message : "Quote discovery failed." });
+    }
+  }
+  const configReceiver = process.env.HEDERA_RECEIVER_ACCOUNT_ID;
+  const decision = selectCheapestEligibleService({
+    services: registry, requirementsByService, budgetTinybars: budget,
+    allowedServiceIds: policy.allowedServiceIds,
+    allowedReceiverIds: configReceiver ? [configReceiver] : [],
+    network: policy.network,
+  });
+  return {
+    mode: "preview" as const,
+    paymentAttempted: false as const,
+    goal: input.goal.trim(),
+    network: policy.network,
+    budgetTinybars: budget,
+    discoveryHttpCalls: httpCalls,
+    candidates: checks,
+    selected: decision.selected ? {
+      serviceId: decision.selected.service.id,
+      description: decision.selected.service.description,
+      amountTinybars: decision.selected.amountTinybars,
+      amountHbar: amountHbar(decision.selected.amountTinybars),
+      asset: decision.selected.requirement.asset,
+      receiverAccountId: decision.selected.requirement.payTo,
+    } : null,
+    rejectionReasons: decision.rejected,
+    note: "Preview performs only HTTP quote discovery. It never reserves funds, constructs a signer, or sends payment.",
+  };
+}
+
 export function isAgentV2Enabled(): boolean {
   return process.env.HEDERA_AGENT_V2_ENABLED === "true" &&
     process.env.NODE_ENV !== "production" &&
@@ -71,13 +141,14 @@ export function isAgentV2Enabled(): boolean {
  */
 export async function runAgentV2Task(
   input: AgentV2TaskInput,
-  options: { signal: AbortSignal; runId?: string },
+  options: { signal: AbortSignal; runId?: string; approvedQuote?: ApprovedPaymentQuote },
 ): Promise<AgentV2TaskResult> {
   if (!isAgentV2Enabled()) throw new Error("Agent v2 is disabled. Enable HEDERA_AGENT_V2_ENABLED=true for local Hedera Testnet development only.");
   if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
   const policy = input.policy ?? { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 };
   if (policy.expiresAt <= Date.now()) throw new Error("Wallet authorization or user policy expired before task execution.");
-  if (policy.mode !== "autonomous") throw new Error(policy.mode === "preview" ? "Preview mode never signs or sends payments." : "Approval-required mode needs an explicit approval flow; no payment was signed or sent.");
+  if (policy.mode === "preview") throw new Error("Preview mode never signs or sends payments.");
+  if (policy.mode === "approval-required" && !options.approvedQuote) throw new Error("Approval-required mode needs a wallet-signed quote-specific approval; no payment was signed or sent.");
   const config = getX402Configuration();
   if (!config) throw new Error("Set HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY in services/api/.env.");
 
@@ -136,14 +207,30 @@ export async function runAgentV2Task(
   // The task budget is reserved logically for the whole run; the persistent
   // firewall reservation below is written before the signer is constructed.
   const selected = decision.selected;
-  const simulation = simulateSpendingPolicy(policy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
+  const approvedQuote = options.approvedQuote;
+  if (approvedQuote) {
+    if (approvedQuote.expiresAt <= Date.now() ||
+        approvedQuote.serviceId !== selected.service.id ||
+        approvedQuote.network !== selected.requirement.network ||
+        approvedQuote.asset !== selected.requirement.asset ||
+        approvedQuote.amountTinybars !== selected.amountTinybars ||
+        approvedQuote.receiverAccountId !== selected.requirement.payTo) {
+      throw new Error("Discovered quote does not exactly match the wallet-approved service, network, asset, amount, receiver, or expiry.");
+    }
+  }
+  const enforcementPolicy = approvedQuote ? {
+    ...policy,
+    mode: "autonomous" as const,
+    approvalThresholdTinybars: Math.max(policy.approvalThresholdTinybars, selected.amountTinybars),
+  } : policy;
+  const simulation = simulateSpendingPolicy(enforcementPolicy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
   if (!simulation.allowed) throw new Error(simulation.reason);
   if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
   const reservation = await reserveAgentV2Spend({
     amountTinybars: String(selected.amountTinybars),
     receiverAccountId: selected.requirement.payTo,
     resourceUrl: selected.service.url,
-  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay });
+  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay, taskId: runId, taskBudgetTinybars: limits.budgetTinybars, maxPaidCallsPerTask: limits.maxPaidCalls });
   if (!reservation.allowed) throw new Error(reservation.reason);
   if (signal.aborted) throw new Error("Agent v2 task was cancelled before payment execution.");
 

@@ -78,10 +78,17 @@ export default function App() {
   async function simulatePolicy() {
     setBusy("simulate"); setError(""); setPolicySimulation(null);
     try {
-      const response = await fetch(apiUrl("/api/agent/v2/policy/simulate"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ policy: buildUserPolicy(), quote: { serviceId: "heder1-short-summary", network: "hedera:testnet", asset: "0.0.0", amountTinybars: 50_000 } }) });
-      const result = await response.json() as { allowed: boolean; requiresApproval?: boolean; reason: string };
-      setPolicySimulation(result);
-      if (!response.ok) setError(result.reason ?? "Policy simulation failed.");
+      if (agentMode === "preview") {
+        const response = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: "Compare approved service quotes for a short report", policy: buildUserPolicy(), budgetTinybars: Number(taskBudgetTinybars) }) });
+        const result = await response.json() as { selected?: { serviceId: string; amountTinybars: number; amountHbar: string }; candidates?: Array<{ serviceId: string; status: string; reason: string }>; error?: string; paymentAttempted?: boolean };
+        if (!response.ok) throw new Error(result.error ?? "Quote preview failed.");
+        setPolicySimulation({ allowed: Boolean(result.selected), reason: result.selected ? `Preview only: ${result.selected.serviceId} quoted ${result.selected.amountTinybars} tinybars (${result.selected.amountHbar} HBAR). No funds were reserved and no payment was attempted. ${(result.candidates ?? []).map(item => `${item.serviceId}: ${item.status} — ${item.reason}`).join(" | ")}` : `No eligible quote found. No payment was attempted. ${(result.candidates ?? []).map(item => `${item.serviceId}: ${item.reason}`).join(" | ")}` });
+      } else {
+        const response = await fetch(apiUrl("/api/agent/v2/policy/simulate"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ policy: buildUserPolicy(), quote: { serviceId: "heder1-short-summary", network: "hedera:testnet", asset: "0.0.0", amountTinybars: 50_000 } }) });
+        const result = await response.json() as { allowed: boolean; requiresApproval?: boolean; reason: string };
+        setPolicySimulation(result);
+        if (!response.ok) setError(result.reason ?? "Policy simulation failed.");
+      }
     } catch (e) { setError(e instanceof Error ? e.message : "Policy simulation failed."); }
     finally { setBusy(""); }
   }
@@ -146,11 +153,33 @@ export default function App() {
   async function runAgent() {
     setBusy("agent"); setError(""); setNotice("");
     try {
-      if (!token) throw new Error("Sign and authorize one invocation first.");
+      if (!window.ethereum || !wallet || !isTestnet || !consent) throw new Error("Connect your wallet on Hedera Testnet and confirm consent before continuing.");
+      if (agentMode === "preview") throw new Error("Preview mode never pays. Use the preview control to inspect quotes.");
       const policy = buildUserPolicy();
+      const goal = "Find the cheapest approved source for a short report and return its receipt";
+      const planResponse = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal, policy, budgetTinybars: policy.taskBudgetTinybars }) });
+      const plan = await planResponse.json() as { error?: string; selected?: { serviceId: string; amountTinybars: number; amountHbar: string; asset: string; receiverAccountId: string }; paymentAttempted?: boolean };
+      if (!planResponse.ok || !plan.selected) throw new Error(plan.error ?? "No eligible quote was found. No payment was attempted.");
+      setNotice(`Quote selected: ${plan.selected.serviceId}, ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR). Review the exact quote in your wallet signature request.`);
+      const requiresApproval = agentMode === "approval-required" || plan.selected.amountTinybars > policy.approvalThresholdTinybars;
+      let headers: Record<string, string> = { "content-type": "application/json" };
+      if (requiresApproval) {
+        const challengeResponse = await fetch(apiUrl("/api/agent/v2/approval/challenge"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: wallet, policy, quote: { serviceId: plan.selected.serviceId, network: policy.network, asset: plan.selected.asset, amountTinybars: plan.selected.amountTinybars, receiverAccountId: plan.selected.receiverAccountId } }) });
+        const challenge = await challengeResponse.json() as { nonce?: string; message?: string; error?: string };
+        if (!challengeResponse.ok || !challenge.nonce || !challenge.message) throw new Error(challenge.error ?? "Could not create quote-specific approval challenge.");
+        const signature = await window.ethereum.request({ method: "personal_sign", params: [challenge.message, wallet] });
+        if (typeof signature !== "string") throw new Error("Wallet did not return a signature.");
+        const verifyResponse = await fetch(apiUrl("/api/agent/v2/approval/verify"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nonce: challenge.nonce, signature }) });
+        const approval = await verifyResponse.json() as { approvalToken?: string; error?: string };
+        if (!verifyResponse.ok || !approval.approvalToken) throw new Error(approval.error ?? "Payment approval verification failed.");
+        headers["x-heder1-payment-approval"] = approval.approvalToken;
+      } else {
+        if (!token) throw new Error("Sign the one-time agent authorization first. The discovered quote is below your approval threshold.");
+        headers["x-heder1-authorization"] = token;
+      }
       const runId = crypto.randomUUID();
       setActiveRunId(runId);
-      const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers: { "content-type": "application/json", "x-heder1-authorization": token }, body: JSON.stringify({ runId, goal: "Find the cheapest approved source for a short report and return its receipt", budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
+      const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers, body: JSON.stringify({ runId, goal, budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
       const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ transactionId?: string; explorerUrl?: string }>; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
@@ -206,11 +235,11 @@ export default function App() {
           <label>Mode<select value={agentMode} onChange={e => { setAgentMode(e.target.value as "preview" | "autonomous" | "approval-required"); setPolicySimulation(null); setToken(""); }}><option value="preview">Preview — no payment</option><option value="autonomous">Autonomous — within limits</option><option value="approval-required">Approval required — fail closed</option></select></label>
           <div className="policy-fields"><label>Max payment (tinybars)<input inputMode="numeric" value={maxPaymentTinybars} onChange={e => { setMaxPaymentTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Task budget (tinybars)<input inputMode="numeric" value={taskBudgetTinybars} onChange={e => { setTaskBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily budget (tinybars)<input inputMode="numeric" value={dailyBudgetTinybars} onChange={e => { setDailyBudgetTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Daily paid-call cap<input inputMode="numeric" value={maxPaidCallsPerDay} onChange={e => { setMaxPaidCallsPerDay(e.target.value); setToken(""); setPolicySimulation(null); }}/></label><label>Approval threshold (tinybars)<input inputMode="numeric" value={approvalThresholdTinybars} onChange={e => { setApprovalThresholdTinybars(e.target.value); setToken(""); setPolicySimulation(null); }}/></label></div>
           <p className="panel-footnote">Hard ceilings: 100,000 tinybars/payment, 500,000/task, 1,000,000/day. HBAR on Hedera Testnet and approved services only.</p>
-          <div className="action-row"><button className="button secondary" onClick={() => void simulatePolicy()} disabled={Boolean(busy)}>{busy === "simulate" ? "Simulating…" : "Simulate 0.0005 HBAR quote"}</button></div>
-          {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{policySimulation.allowed ? "Policy permits quote" : policySimulation.requiresApproval ? "Approval required" : "Quote blocked"}</strong><span>{policySimulation.reason}</span></div>}
+          <div className="action-row"><button className="button secondary" onClick={() => void simulatePolicy()} disabled={Boolean(busy)}>{busy === "simulate" ? "Checking quotes…" : agentMode === "preview" ? "Preview registered services" : "Simulate 0.0005 HBAR quote"}</button></div>
+          {policySimulation && <div className={policySimulation.allowed ? "verify-result valid" : "verify-result invalid"} role="status"><strong>{agentMode === "preview" ? (policySimulation.allowed ? "Preview plan ready" : "No eligible quote") : policySimulation.allowed ? "Policy permits quote" : policySimulation.requiresApproval ? "Approval required" : "Quote blocked"}</strong><span>{policySimulation.reason}</span></div>}
         </div>
-        <label className="consent-row"><input type="checkbox" checked={consent} disabled={!wallet || !isTestnet || Boolean(token) || agentMode !== "autonomous" || Boolean(busy)} onChange={e => setConsent(e.target.checked)}/><span>Approve one task under the policy shown above. Your wallet signature binds these limits and expires within two minutes.</span></label>
-        <div className="action-row"><button className="button secondary" onClick={() => void authorize()} disabled={!wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy)}>{busy === "authorize" ? "Waiting for signature…" : token ? "Authorization ready" : "Sign authorization"}</button><button className="button primary" onClick={() => void runAgent()} disabled={!token || agentMode !== "autonomous" || Boolean(busy) || Boolean(data.agentV2?.killSwitchEnabled)}>{busy === "agent" ? "Running…" : "Run agent"}</button>{token && <button className="button secondary" onClick={() => void revokeGrant()} disabled={Boolean(busy)}>{busy === "revoke" ? "Revoking…" : "Revoke grant"}</button>}{busy === "agent" && activeRunId && <button className="button secondary" onClick={() => void cancelActiveRun()} disabled={cancelBusy}>{cancelBusy ? "Cancelling…" : "Cancel task"}</button>}</div>
+        <label className="consent-row"><input type="checkbox" checked={consent} disabled={!wallet || !isTestnet || Boolean(busy)} onChange={e => setConsent(e.target.checked)}/><span>Approve one task under the policy shown above. Your wallet signature binds these limits and expires within two minutes.</span></label>
+        <div className="action-row"><button className="button secondary" onClick={() => void authorize()} disabled={!wallet || !isTestnet || !consent || Boolean(token) || Boolean(busy) || agentMode === "approval-required"}>{busy === "authorize" ? "Waiting for signature…" : token ? "Authorization ready" : "Sign authorization"}</button><button className="button primary" onClick={() => void runAgent()} disabled={!consent || agentMode === "preview" || (!token && agentMode === "autonomous" && !wallet) || Boolean(busy) || Boolean(data.agentV2?.killSwitchEnabled)}>{busy === "agent" ? "Running…" : agentMode === "approval-required" ? "Plan & approve payment" : "Run agent"}</button>{token && <button className="button secondary" onClick={() => void revokeGrant()} disabled={Boolean(busy)}>{busy === "revoke" ? "Revoking…" : "Revoke grant"}</button>}{busy === "agent" && activeRunId && <button className="button secondary" onClick={() => void cancelActiveRun()} disabled={cancelBusy}>{cancelBusy ? "Cancelling…" : "Cancel task"}</button>}</div>
         <p className="panel-footnote">Agent execution can spend testnet HBAR. If disabled by the server, the request is rejected; the frontend cannot override that policy.</p>
       </section>
     </div>
