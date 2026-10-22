@@ -14,6 +14,8 @@ services:
         sync: false
       - key: HEDERA_NETWORK
         value: testnet
+      - key: HEDERA_MAINNET_READINESS_ENABLED
+        value: "false"
       - key: HEDERA_CORS_ORIGINS
         value: https://heder1-web.onrender.com
       - key: HEDERA_AGENT_ENABLED

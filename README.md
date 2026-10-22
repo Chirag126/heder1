@@ -6,7 +6,7 @@ heder1 is a testnet-focused Web3 project that demonstrates how an AI agent can a
 
 The project combines an x402 payment flow, a bounded autonomous agent, a spending firewall, wallet-signed one-time authorization, a hash-chained local audit log, optional Hedera Consensus Service (HCS) anchoring, and a live product dashboard.
 
-> **Current status:** Phases 0–11 are implemented as a Hedera Testnet prototype. Phase 12 adds PostgreSQL-backed reservations, persistent wallet authorization and quote approvals, task idempotency, x402 proof replay protection, recovery sweeps, and API hardening. Public Render payment execution remains disabled. Database/provider configuration, backup and alert operations, CI results, and deployment acceptance must be verified before treating Phase 12 as complete or the project as production-ready.
+> **Current status:** Phases 0–12 are implemented for a Hedera Testnet-focused prototype. Phase 13 adds explicit network-mode reporting and a read-only, quote-bound mainnet readiness gate. Testnet remains the only enabled payment network, and mainnet payment execution is not implemented or enabled. Production database operations, alerting, backups, and any future mainnet execution require separate operational validation.
 
 ## Table of contents
 
@@ -28,6 +28,7 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - [Phase 9: settlement receipt validation](#phase-9-settlement-receipt-validation)
 - [Phase 9 live acceptance evidence](#phase-9-live-acceptance-evidence)
 - [Phase 10: autonomous agent v2](#phase-10-autonomous-agent-v2)
+- [Phase 13: mainnet readiness gate](docs/PHASE-13.md)
 - [User spending policy and reservation operations](docs/SPENDING-POLICY.md)
 - [Validation and testing](#validation-and-testing)
 - [Limitations and future work](#limitations-and-future-work)
@@ -49,7 +50,9 @@ The project combines an x402 payment flow, a bounded autonomous agent, a spendin
 - **No-payment quote planning:** inspect registered services' actual HTTP 402 quotes and return candidate prices, selected service, and rejection reasons without signing or reserving funds.
 - **Durable payment state (Phase 12):** PostgreSQL transactions and advisory locks for wallet-scoped reservations; persistent authorization challenges/grants; durable task idempotency; explicit submitted/unknown states; conservative recovery and legacy JSON cutover. Local JSON is development-only.
 - **Operator reconciliation API:** protected by a server-only `HEDERA_RECONCILIATION_TOKEN`; records operator-confirmed settlement outcomes after independent HashScan/Mirror Node checks. It does not independently prove settlement.
-- **Quote-specific wallet approval:** the dashboard obtains a fresh quote, shows the exact service/amount, requests an EIP-191 message signature, and executes only if the runner rediscovers the same service, network, asset, amount, receiver, and expiry. This is a message signature, not a transaction signature.\n- **Controlled multi-service tasks:** autonomous mode can pay multiple approved services sequentially, within the user-signed task/daily budgets, paid-call caps, step budget, kill switch, and per-payment reservation checks. Quote-specific approval remains one payment only.
+- **Quote-specific wallet approval:** the dashboard obtains a fresh quote, shows the exact service/amount, requests an EIP-191 message signature, and executes only if the runner rediscovers the same service, network, asset, amount, receiver, and expiry. This is a message signature, not a transaction signature.
+- **Controlled multi-service tasks:** autonomous mode can pay multiple approved services sequentially, within the user-signed task/daily budgets, paid-call caps, step budget, kill switch, and per-payment reservation checks. Quote-specific approval remains one payment only.
+- **Phase 13 network modes:** API-reported network availability, testnet-only execution, mainnet facilitator and Mirror Node checks, HBAR/HTS decimals and balance validation, maximum-exposure validation, and a separate short-lived wallet-signed readiness grant. Readiness never enables or executes a mainnet payment; see [docs/PHASE-13.md](docs/PHASE-13.md).
 
 ## Architecture
 
