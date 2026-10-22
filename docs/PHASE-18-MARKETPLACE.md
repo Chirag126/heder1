@@ -8,6 +8,7 @@ Add a safe marketplace layer on top of the existing Phase 10 x402 quote discover
 
 - `GET /.well-known/agent-card.json`: a discovery descriptor for the Heder1 buyer agent.
 - `GET /api/marketplace/agents`: two local provider-agent cards, each with a distinct ID, capabilities, service binding, network/asset support, and explicit local-unverified identity status.
+- Dashboard **Agent Marketplace** page: submit a goal and budget, compare discovered provider offers, inspect each offer's capability and identity status, and move the selected provider into the existing Agent Playground. The UI never pays directly from the negotiation button.
 - `POST /api/marketplace/negotiate`: discovers the live x402 quotes through the existing preview planner, filters them against the buyer's budget and existing 100,000-tinybar per-payment ceiling, evaluates task intent, and returns a deterministic offer decision.
 - Audit event `marketplace.negotiation_completed` records only the negotiation summary, not secrets or payment proofs.
 - Unit tests cover provider identities, price selection, capability preference, budget rejection, and invalid input.
@@ -52,7 +53,7 @@ The following sponsor extras remain **not implemented** and must not be claimed 
 - Hedera Scheduled Transactions recurring payments.
 - Runtime Hedera Agent Kit or hosted Network MCP integration.
 - Full standards-conformant A2A JSON-RPC task lifecycle or ACP negotiation.
-- Independent third-party provider deployments and marketplace UI.
+- Independent third-party provider deployments.
 
 These are intentionally deferred instead of being represented by mock integrations or untested payment paths. Each requires a separate, integration-specific implementation and tests.
 
