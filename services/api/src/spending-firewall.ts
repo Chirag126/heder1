@@ -111,7 +111,7 @@ export async function reserveAgentSpend(
  */
 export async function reserveAgentV2Spend(
   input: { amountTinybars: string; receiverAccountId: string; resourceUrl: string },
-  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number } = {},
+  options: { path?: string; now?: Date; maxPaymentTinybars?: number; dailyBudgetTinybars?: number; maxAttemptsPerDay?: number; taskId?: string; taskBudgetTinybars?: number; maxPaidCallsPerTask?: number; accountId?: string } = {},
 ): Promise<FirewallReservation> {
   const amount = Number(input.amountTinybars);
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > Math.min(FIREWALL_MAX_PAYMENT_TINYBARS, options.maxPaymentTinybars ?? FIREWALL_MAX_PAYMENT_TINYBARS)) {
@@ -132,6 +132,7 @@ export async function reserveAgentV2Spend(
     amountTinybars: amount,
     receiverAccountId: input.receiverAccountId,
     resourceUrl: input.resourceUrl,
+    accountId: options.accountId,
   }, {
     path: options.path,
     now: options.now,
