@@ -134,11 +134,13 @@ export default function App() {
     setBusy("agent"); setError(""); setNotice("");
     try {
       if (!token) throw new Error("Sign and authorize one invocation first.");
-      const response = await fetch(apiUrl("/api/agent/run"), { method: "POST", headers: { "x-heder1-authorization": token } });
-      const result = await response.json() as { error?: string; response?: { status?: number; body?: Record<string, unknown> }; note?: string };
+      const policy = buildUserPolicy();
+      const runId = crypto.randomUUID();
+      const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers: { "content-type": "application/json", "x-heder1-authorization": token }, body: JSON.stringify({ runId, goal: "Find the cheapest approved source for a short report and return its receipt", budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
+      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ transactionId?: string; explorerUrl?: string }>; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
-      setNotice(`Agent completed with resource HTTP status ${result.response?.status ?? response.status}. Review the audit history for the recorded outcome.`);
+      setNotice(`Agent ${result.status ?? "completed"}: ${result.selection?.serviceId ?? "approved service"} at ${result.selection?.amountHbar ?? "quoted price"} HBAR. Review the audit history and transaction receipt.`);
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); await refresh(); }
     finally { setBusy(""); }
