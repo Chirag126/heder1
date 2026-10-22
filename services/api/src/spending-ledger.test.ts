@@ -36,6 +36,20 @@ test("concurrent reservations cannot exceed the daily budget", async () => {
   assert.equal(results.filter(r => !r.allowed).length, 2);
 });
 
+test("task budget and per-task call count reject repeated reservations", async () => {
+  const path = await pathForTest();
+  const first = await reserveDurableSpend(input, { ...options, path, taskId: "task-a", taskBudgetTinybars: 75_000, maxPaidCallsPerTask: 2 });
+  assert.equal(first.allowed, true);
+  const overBudget = await reserveDurableSpend(input, { ...options, path, taskId: "task-a", taskBudgetTinybars: 75_000, maxPaidCallsPerTask: 2 });
+  assert.equal(overBudget.allowed, false);
+  if (!overBudget.allowed) assert.match(overBudget.reason, /Task spending budget/);
+  const second = await reserveDurableSpend({ ...input, amountTinybars: 25_000 }, { ...options, path, taskId: "task-a", taskBudgetTinybars: 75_000, maxPaidCallsPerTask: 2 });
+  assert.equal(second.allowed, true);
+  const callCap = await reserveDurableSpend({ ...input, amountTinybars: 1 }, { ...options, path, taskId: "task-a", taskBudgetTinybars: 100_000, maxPaidCallsPerTask: 2 });
+  assert.equal(callCap.allowed, false);
+  if (!callCap.allowed) assert.match(callCap.reason, /Per-task paid-call limit/);
+});
+
 test("ambiguous settlement retains the reservation; confirmed failure releases it", async () => {
   const path = await pathForTest();
   const reserved = await reserveDurableSpend(input, { ...options, path });
