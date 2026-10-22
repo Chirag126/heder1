@@ -72,11 +72,19 @@ Version-1 aggregate balances are migrated conservatively. Existing reserved bala
 
 This design is suitable for a single host where all processes share the same filesystem and lock semantics. It is **not** a distributed database or safe for separate machines, ephemeral deployment filesystems, or serverless instances with independent disks. For that, replace the file ledger with a transactional shared database and row-level/serializable locking before enabling concurrent payment workers.
 
-## Approval modes and current execution boundary
+## Quote-specific wallet approval
 
-The policy simulator fails closed for `preview`, `approval-required`, and autonomous quotes above the approval threshold. The current dashboard/runner does not yet provide a complete wallet-signed approve-and-resume payment workflow. Do not bypass that behavior or change it to allow payment without a fresh explicit approval flow.
+The API now supports a backend wallet-signature approval path for an exact discovered quote:
 
-The runner still executes at most one paid call per task. Durable task-level reservation accounting is in place to reject repeated reservations beyond the signed task budget/call limit, but multi-service execution is not enabled yet.
+1. Call `POST /api/agent/v2/plan` and inspect the selected service, amount, network, asset, and receiver.
+2. Call `POST /api/agent/v2/approval/challenge` with the connected wallet address, the intended policy, and those exact quote fields. The server returns a human-readable message that binds the wallet, policy, quote, nonce, and expiry.
+3. Ask the wallet to sign the returned message with `personal_sign` / EIP-191. This is a message signature, not a blockchain transaction signature.
+4. Send the nonce and signature to `POST /api/agent/v2/approval/verify`. It returns a short-lived, single-use `approvalToken`.
+5. Submit the normal `POST /api/agent/v2/run` body with `x-heder1-payment-approval: <approvalToken>`. The runner rediscovers the service quote and rejects execution unless service, network, asset, amount, receiver, and expiry exactly match the signed approval. The reservation firewall and kill switch are checked again before signing.
+
+The challenge/verify approval token can authorize one exact quote only and is consumed once. A changed quote requires a new wallet approval. The existing dashboard does not yet expose all of these API steps as a guided UI; the backend endpoints are available for integration and tests.
+
+The runner still executes at most one paid call per task. Durable task-level reservation accounting rejects repeated reservations beyond the signed task budget/call limit, but multi-service payment execution is not enabled yet.
 
 ## Validation
 
