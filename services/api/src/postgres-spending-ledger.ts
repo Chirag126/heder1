@@ -240,8 +240,8 @@ export async function recoverStalePostgresPayments(staleAfterMs = 120_000): Prom
     );
     const tasks = await client.query(
       `UPDATE task_runs
-       SET status='unknown', error_code='stale_run_requires_reconciliation', updated_at=now()
-       WHERE status IN ('reserved','submitted') AND updated_at < now() - ($1 * interval '1 minute')
+       SET status=CASE WHEN status='quoted' THEN 'failed' ELSE 'unknown' END, error_code=CASE WHEN status='quoted' THEN 'stale_pre_payment_run_expired' ELSE 'stale_run_requires_reconciliation' END, updated_at=now()
+       WHERE status IN ('quoted','reserved','submitted') AND updated_at < now() - ($1 * interval '1 minute')
        RETURNING run_id`,
       [minutes],
     );
