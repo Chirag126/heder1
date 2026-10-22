@@ -181,7 +181,7 @@ export default function App() {
       const runId = crypto.randomUUID();
       setActiveRunId(runId);
       const response = await fetch(apiUrl("/api/agent/v2/run"), { method: "POST", headers, body: JSON.stringify({ runId, goal, budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds }) });
-      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string }>; warnings?: string[]; note?: string };
+      const result = await response.json() as { error?: string; status?: string; selection?: { serviceId?: string; amountHbar?: string }; receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string }>; expenditure?: { reservedHbar?: string; paidCalls?: number }; warnings?: string[]; note?: string };
       setToken(""); setConsent(false);
       if (!response.ok) throw new Error(result.error ?? result.note ?? `Agent failed with HTTP ${response.status}.`);
       setNotice(`Agent ${result.status ?? "completed"}: ${result.receipts?.length ?? 1} payment(s), ${result.expenditure?.reservedHbar ?? result.selection?.amountHbar ?? "quoted price"} HBAR total. ${result.warnings?.join(" ") ?? ""} Review each transaction receipt and audit history.`);
