@@ -15,6 +15,7 @@ import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpend
 import { claimTaskRun, consumeRateLimit, databaseConfigured, updateTaskRun } from "./database.js";
 import { checkMainnetReadiness, consumeMainnetReadinessGrant, createMainnetReadinessChallenge, verifyMainnetReadinessChallenge, type MainnetReadinessInput } from "./mainnet-readiness.js";
 import { getTestnetAccountSnapshot } from "./hedera-readonly-tools.js";
+import { dailyTaskQuota, estimateTaskCost, getPublicPricing, reportActualTaskCost } from "./cost-report.js";
 
 export const app = Fastify({
   logger: {
@@ -415,6 +416,23 @@ app.get("/api/agent/status", async () => ({
 const agentV2Runs = new Map<string, AbortController>();
 const agentV2CompletedRuns = new Set<string>();
 
+/** Phase 16: public cost disclosure; no account data or secrets are returned. */
+app.get("/api/pricing", async () => getPublicPricing());
+
+app.post<{ Body: { serviceId?: string; maxPaidCalls?: number } }>("/api/costs/estimate", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["serviceId"], properties: {
+    serviceId: { type: "string", enum: ["heder1-full-report", "heder1-short-summary"] },
+    maxPaidCalls: { type: "integer", minimum: 1, maximum: 3 },
+  } } },
+}, async (request, reply) => {
+  if (typeof request.body?.serviceId !== "string") return reply.code(400).send({ error: "An approved serviceId is required." });
+  try {
+    return estimateTaskCost(request.body.serviceId, request.body.maxPaidCalls ?? 1);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not estimate task cost." });
+  }
+});
+
 app.get("/api/agent/v2/policy", async () => ({
   killSwitchEnabled: process.env.HEDERA_AGENT_KILL_SWITCH === "true",
   policy: { ...DEFAULT_USER_SPENDING_POLICY, expiresAt: Date.now() + 120_000 },
@@ -630,6 +648,32 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", {
     await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { phase: "10", reason: authorization.reason } });
     return reply.code(401).send({ error: authorization.reason, hint: "Obtain a valid wallet-signed one-time agent authorization or quote-specific payment approval first." });
   }
+  let quotaLimit: number;
+  try {
+    quotaLimit = dailyTaskQuota();
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Invalid task quota configuration." });
+  }
+  let quota: { allowed: boolean; remaining: number; retryAfterSeconds: number };
+  try {
+    quota = await consumeRateLimit(`heder1:task-quota:${authorization.account.toLowerCase()}`, quotaLimit, 24 * 60 * 60 * 1000);
+  } catch {
+    return reply.code(503).send({ error: "Task quota service is unavailable; task execution blocked." });
+  }
+  reply.header("X-Heder1-Task-Quota-Limit", String(quotaLimit));
+  reply.header("X-Heder1-Task-Quota-Remaining", String(quota.remaining));
+  if (!quota.allowed) {
+    reply.header("Retry-After", String(quota.retryAfterSeconds));
+    await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: {
+      phase: "16", action: "daily_task_quota_exceeded", account: authorization.account,
+      quotaLimit, retryAfterSeconds: quota.retryAfterSeconds,
+    } });
+    return reply.code(429).send({
+      error: "Daily task quota exceeded.",
+      usage: { dailyTaskQuota: quotaLimit, remaining: 0, window: "rolling-24-hours" },
+      retryAfterSeconds: quota.retryAfterSeconds,
+    });
+  }
   const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const claimed = await claimTaskRun({ runId, walletAddress: authorization.account, idempotencyKey: runId, requestHash });
   if (!claimed) return reply.code(409).send({ error: "This task/run ID or idempotency key has already been used." });
@@ -639,10 +683,11 @@ app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", {
     await updateTaskRun(runId, authorization.account, "reserved");
     await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: { phase: "12", runId, account: authorization.account, scope: authorization.scope } });
     const result = await runAgentV2Task({ ...input, policy: authorization.policy }, { signal: controller.signal, runId, approvedQuote, accountId: authorization.account });
+    const costReport = reportActualTaskCost(result.receipts);
     const taskStatus = result.warnings?.length ? "unknown" : "settled";
-    await updateTaskRun(runId, authorization.account, taskStatus, { paidCalls: result.expenditure.paidCalls, receipts: result.receipts.map(receipt => ({ serviceId: receipt.serviceId, transactionId: receipt.transactionId, amountTinybars: receipt.amountTinybars })), warnings: result.warnings ?? [] });
-    await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "12", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null } });
-    return reply.code(200).send({ ...result, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
+    await updateTaskRun(runId, authorization.account, taskStatus, { paidCalls: result.expenditure.paidCalls, receipts: result.receipts.map(receipt => ({ serviceId: receipt.serviceId, transactionId: receipt.transactionId, amountTinybars: receipt.amountTinybars })), costReport, warnings: result.warnings ?? [] });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "accepted", details: { phase: "16", runId, account: authorization.account, serviceId: result.selection.serviceId, paidCalls: result.expenditure.paidCalls, amountTinybars: result.expenditure.reservedTinybars, knownUserCostTinybars: costReport.knownUserCost.amountTinybars, heder1ServiceFeeTinybars: "0", modelInferenceUsd: "0", hostingCostAllocated: false, dailyTaskQuota: quotaLimit, dailyTaskQuotaRemaining: quota.remaining, transactionId: result.receipts[0]?.transactionId ?? null } });
+    return reply.code(200).send({ ...result, costReport, usage: { dailyTaskQuota: quotaLimit, remaining: quota.remaining, window: "rolling-24-hours" }, authorization: { account: authorization.account, scope: authorization.scope, consumed: true } });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Agent v2 task failed.";
     try { await updateTaskRun(runId, authorization.account, "unknown", undefined, "payment_outcome_requires_reconciliation"); } catch { /* preserve original response; durable state remains fail-closed */ }
