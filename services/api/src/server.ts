@@ -6,7 +6,7 @@ import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js"
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, previewAgentV2Plan, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
-import { listDurableReservations, reconcileDurableReservation } from "./spending-ledger.js";
+import { listDurableReservations, reconcileDurableReservation, recoverStaleDurableReservations } from "./spending-ledger.js";
 import { consumePaymentApproval, createPaymentApprovalChallenge, verifyPaymentApproval, type ApprovedPaymentQuote } from "./payment-approval.js";
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
@@ -88,7 +88,14 @@ app.addHook("onRequest", async (request, reply) => {
   }
 });
 
-app.get("/api/health", async () => ({ status: "ok", service: "heder1-api", network: process.env.HEDERA_NETWORK ?? "testnet", phase: "x402-paid-resource" }));
+app.get("/api/health", async () => ({
+  status: "ok",
+  service: "heder1-api",
+  network: process.env.HEDERA_NETWORK ?? "testnet",
+  phase: "phase-12-durable-payment-infrastructure",
+  storage: databaseConfigured() ? "postgresql-configured" : process.env.NODE_ENV === "production" ? "postgresql-missing" : "local-development-only",
+  paymentExecutionEnabled: false,
+}));
 
 app.get("/api", async () => ({
   name: "heder1",
@@ -531,8 +538,21 @@ app.post<{ Body: { confirmPayment?: boolean } }>("/api/x402/demo-payment", async
 });
 
 async function start() {
-  try { await app.listen({ port, host }); }
-  catch (error) { app.log.error(error); process.exit(1); }
+  try {
+    if (databaseConfigured()) {
+      const recovered = await recoverStaleDurableReservations(120_000);
+      app.log.info({ ...recovered }, "Phase 12 startup recovery sweep completed");
+      const recoveryTimer = setInterval(() => {
+        void recoverStaleDurableReservations(120_000)
+          .then(result => {
+            if (result.reservationsMarkedUnknown || result.tasksMarkedUnknown) app.log.warn({ ...result }, "Stale payment states require reconciliation");
+          })
+          .catch(error => app.log.error({ err: error }, "Payment recovery sweep failed; no uncertain reservation is released"));
+      }, 60_000);
+      recoveryTimer.unref();
+    }
+    await app.listen({ port, host });
+  } catch (error) { app.log.error(error); process.exit(1); }
 }
 // Export the Fastify instance for safe in-process integration tests.
 if (process.env.NODE_ENV !== "test") void start();
