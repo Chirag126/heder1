@@ -200,7 +200,22 @@ app.get("/api/agent/v2/policy", async () => ({
   mainnetEnabled: false,
 }));
 
-app.post<{ Body: { policy?: UserSpendingPolicy; quote?: { serviceId?: string; network?: string; asset?: string; amountTinybars?: number; taskSpentTinybars?: number; dailyReservedTinybars?: number; paidCallsThisTask?: number; paidCallsToday?: number; now?: number } }> }>("/api/agent/v2/policy/simulate", async (request, reply) => {
+type PolicySimulationBody = {
+  policy?: UserSpendingPolicy;
+  quote?: {
+    serviceId?: string;
+    network?: string;
+    asset?: string;
+    amountTinybars?: number;
+    taskSpentTinybars?: number;
+    dailyReservedTinybars?: number;
+    paidCallsThisTask?: number;
+    paidCallsToday?: number;
+    now?: number;
+  };
+};
+
+app.post<{ Body: PolicySimulationBody }>("/api/agent/v2/policy/simulate", async (request, reply) => {
   const policy = request.body?.policy;
   const quote = request.body?.quote;
   if (!policy || !quote || typeof quote.serviceId !== "string" || typeof quote.network !== "string" || typeof quote.asset !== "string" || typeof quote.amountTinybars !== "number") {
