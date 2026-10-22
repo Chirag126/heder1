@@ -202,119 +202,176 @@ export async function runAgentV2Task(
     throw new Error("No approved service advertises an x402 requirement that fits the user's budget and payment policy. No payment was attempted.");
   }
   if (limits.maxPaidCalls < 1) throw new Error("Paid-call limit reached before payment.");
-  if (httpCalls + 2 > limits.maxSteps) throw new Error("Insufficient remaining steps for the x402 payment challenge/retry flow.");
 
-  // The task budget is reserved logically for the whole run; the persistent
-  // firewall reservation below is written before the signer is constructed.
-  const selected = decision.selected;
-  const approvedQuote = options.approvedQuote;
-  if (approvedQuote) {
-    if (approvedQuote.expiresAt <= Date.now() ||
-        approvedQuote.serviceId !== selected.service.id ||
-        approvedQuote.network !== selected.requirement.network ||
-        approvedQuote.asset !== selected.requirement.asset ||
-        approvedQuote.amountTinybars !== selected.amountTinybars ||
-        approvedQuote.receiverAccountId !== selected.requirement.payTo) {
-      throw new Error("Discovered quote does not exactly match the wallet-approved service, network, asset, amount, receiver, or expiry.");
-    }
+  const runId = options.runId ?? randomUUID();
+  const eligibleCandidates = approvedQuote
+    ? decision.eligible.filter(candidate =>
+        candidate.service.id === approvedQuote.serviceId &&
+        candidate.requirement.network === approvedQuote.network &&
+        candidate.requirement.asset === approvedQuote.asset &&
+        candidate.amountTinybars === approvedQuote.amountTinybars &&
+        candidate.requirement.payTo === approvedQuote.receiverAccountId)
+    : decision.eligible;
+  if (approvedQuote && eligibleCandidates.length === 0) {
+    throw new Error("Discovered quote does not exactly match the wallet-approved service, network, asset, amount, receiver, or expiry.");
   }
-  const enforcementPolicy = approvedQuote ? {
-    ...policy,
-    mode: "autonomous" as const,
-    approvalThresholdTinybars: Math.max(policy.approvalThresholdTinybars, selected.amountTinybars),
-  } : policy;
-  const simulation = simulateSpendingPolicy(enforcementPolicy, { serviceId: selected.service.id, network: selected.requirement.network, asset: selected.requirement.asset, amountTinybars: selected.amountTinybars, taskSpentTinybars: 0, paidCallsThisTask: 0 });
-  if (!simulation.allowed) throw new Error(simulation.reason);
-  if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
-  const reservation = await reserveAgentV2Spend({
-    amountTinybars: String(selected.amountTinybars),
-    receiverAccountId: selected.requirement.payTo,
-    resourceUrl: selected.service.url,
-  }, { maxPaymentTinybars: policy.maxPaymentTinybars, dailyBudgetTinybars: policy.dailyBudgetTinybars, maxAttemptsPerDay: policy.maxPaidCallsPerDay, taskId: runId, taskBudgetTinybars: limits.budgetTinybars, maxPaidCallsPerTask: limits.maxPaidCalls });
-  if (!reservation.allowed) throw new Error(reservation.reason);
-  if (signal.aborted) throw new Error("Agent v2 task was cancelled before payment execution.");
 
-  if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) throw new Error("Task cancelled, authorization expired, or emergency kill switch enabled before signing. Reservation is retained conservatively.");
+  const receipts: AgentV2TaskResult["receipts"] = [];
+  const paidSelections: Array<{ serviceId: string; description: string; amountTinybars: number; network: string; asset: string }> = [];
+  const warnings: string[] = [];
+  let totalReservedTinybars = 0;
+  let lastResult: { resource: string; message: string; body: JsonRecord } | undefined;
+  let paymentsHttpCalls = 0;
 
-  const signer = createClientHederaSigner(
-    config.accountId,
-    PrivateKey.fromStringECDSA(config.privateKey),
-    { network: config.network },
-  );
-  const client = new x402Client()
-    .register("hedera:*", new ExactHederaScheme(signer))
-    .setSpendControls({ allowedAssets: true })
-    .registerPolicy((_version, accepts) => accepts.filter((item) =>
-      item.scheme === selected.requirement.scheme &&
-      item.network === selected.requirement.network &&
-      item.asset === selected.requirement.asset &&
-      item.payTo === selected.requirement.payTo &&
-      item.amount === selected.requirement.amount
-    ));
-
-  const paidFetch = wrapFetchWithPayment(fetch, client);
-  let response: Response;
-  try {
-    if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) throw new Error("Task cancelled, authorization expired, or emergency kill switch enabled before payment delivery. Reservation is retained conservatively.");
-    response = await paidFetch(selected.service.url, {
-      method: "GET",
-      redirect: "error",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-      headers: { accept: "application/json" },
+  for (const candidate of eligibleCandidates) {
+    if (receipts.length >= limits.maxPaidCalls || receipts.length >= policy.maxPaidCallsPerTask) break;
+    if (totalReservedTinybars + candidate.amountTinybars > limits.budgetTinybars) {
+      warnings.push(`Skipped ${candidate.service.id}: task budget would be exceeded.`);
+      continue;
+    }
+    const simulation = simulateSpendingPolicy(approvedQuote ? {
+      ...policy,
+      mode: "autonomous",
+      approvalThresholdTinybars: Math.max(policy.approvalThresholdTinybars, candidate.amountTinybars),
+    } : policy, {
+      serviceId: candidate.service.id,
+      network: candidate.requirement.network,
+      asset: candidate.requirement.asset,
+      amountTinybars: candidate.amountTinybars,
+      taskSpentTinybars: totalReservedTinybars,
+      paidCallsThisTask: receipts.length,
     });
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error("Agent v2 was cancelled or timed out during payment delivery. Settlement may already have occurred; inspect audit records and HashScan before retrying.");
+    if (!simulation.allowed) {
+      warnings.push(`Skipped ${candidate.service.id}: ${simulation.reason}`);
+      continue;
     }
-    throw error;
-  }
-  httpCalls += 2; // One challenge request and one payment-bearing retry.
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok || !isRecord(body) || !isRecord(body.payment)) {
-    throw new Error(`Selected service did not return a successful response and settlement receipt (HTTP ${response.status}).`);
-  }
-  const payment = body.payment;
-  if (body.resource !== selected.service.expectedResource ||
-      payment.status !== "settled" ||
-      typeof payment.transaction !== "string" || !payment.transaction.trim() ||
-      body.amountTinybars !== selected.requirement.amount) {
-    throw new Error("Selected service response failed resource, amount, or settlement-receipt validation.");
+    if (httpCalls + paymentsHttpCalls + 2 > limits.maxSteps) {
+      warnings.push(`Skipped ${candidate.service.id}: remaining step budget is too small for another paid request.`);
+      break;
+    }
+    if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) {
+      warnings.push("Stopped before the next payment because the task was cancelled, policy expired, or emergency kill switch was enabled.");
+      break;
+    }
+
+    const reservation = await reserveAgentV2Spend({
+      amountTinybars: String(candidate.amountTinybars),
+      receiverAccountId: candidate.requirement.payTo,
+      resourceUrl: candidate.service.url,
+    }, {
+      maxPaymentTinybars: policy.maxPaymentTinybars,
+      dailyBudgetTinybars: policy.dailyBudgetTinybars,
+      maxAttemptsPerDay: policy.maxPaidCallsPerDay,
+      taskId: runId,
+      taskBudgetTinybars: limits.budgetTinybars,
+      maxPaidCallsPerTask: limits.maxPaidCallsPerTask,
+    });
+    if (!reservation.allowed) {
+      warnings.push(`Stopped before ${candidate.service.id}: ${reservation.reason}`);
+      break;
+    }
+
+    try {
+      if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) {
+        warnings.push(`Reservation for ${candidate.service.id} retained because cancellation, expiry, or kill switch occurred before signing.`);
+        break;
+      }
+      const signer = createClientHederaSigner(
+        config.accountId,
+        PrivateKey.fromStringECDSA(config.privateKey),
+        { network: config.network },
+      );
+      const client = new x402Client()
+        .register("hedera:*", new ExactHederaScheme(signer))
+        .setSpendControls({ allowedAssets: true })
+        .registerPolicy((_version, accepts) => accepts.filter((item) =>
+          item.scheme === candidate.requirement.scheme &&
+          item.network === candidate.requirement.network &&
+          item.asset === candidate.requirement.asset &&
+          item.payTo === candidate.requirement.payTo &&
+          item.amount === candidate.requirement.amount
+        ));
+      const paidFetch = wrapFetchWithPayment(fetch, client);
+      if (signal.aborted || process.env.HEDERA_AGENT_KILL_SWITCH === "true" || policy.expiresAt <= Date.now()) {
+        warnings.push(`Reservation for ${candidate.service.id} retained because safety state changed before payment delivery.`);
+        break;
+      }
+      const response = await paidFetch(candidate.service.url, {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+        headers: { accept: "application/json" },
+      });
+      paymentsHttpCalls += 2;
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok || !isRecord(body) || !isRecord(body.payment)) {
+        warnings.push(`${candidate.service.id} did not return a valid settlement receipt (HTTP ${response.status}); its reservation remains held for reconciliation.`);
+        break;
+      }
+      const payment = body.payment;
+      if (body.resource !== candidate.service.expectedResource ||
+          payment.status !== "settled" ||
+          typeof payment.transaction !== "string" || !payment.transaction.trim() ||
+          body.amountTinybars !== candidate.requirement.amount) {
+        warnings.push(`${candidate.service.id} failed receipt validation; its reservation remains held for reconciliation.`);
+        break;
+      }
+      const transactionId = payment.transaction.trim();
+      receipts.push({
+        serviceId: candidate.service.id,
+        transactionId,
+        explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(transactionId)}`,
+        amountTinybars: String(candidate.amountTinybars),
+        amountHbar: amountHbar(candidate.amountTinybars),
+        status: "settled",
+      });
+      paidSelections.push({
+        serviceId: candidate.service.id,
+        description: candidate.service.description,
+        amountTinybars: candidate.amountTinybars,
+        network: candidate.requirement.network,
+        asset: "HBAR",
+      });
+      totalReservedTinybars += candidate.amountTinybars;
+      lastResult = {
+        resource: String(body.resource),
+        message: typeof body.message === "string" ? body.message : "Service returned a valid paid resource.",
+        body,
+      };
+    } catch (error) {
+      warnings.push(`${candidate.service.id} payment outcome is uncertain: ${error instanceof Error ? error.message : "unknown payment error"}. Reservation remains held; reconcile before retrying.`);
+      break;
+    }
+    // Quote-specific approval authorizes exactly one payment, never the next service.
+    if (approvedQuote) break;
   }
 
-  const transactionId = payment.transaction.trim();
-  const actual = selected.amountTinybars;
+  if (!receipts.length || !paidSelections.length || !lastResult) {
+    throw new Error(warnings.join(" ") || "No eligible payment could be completed. No settlement receipt was confirmed.");
+  }
+  const first = paidSelections[0]!;
   return {
     runId,
     status: "completed",
     plan,
-    discovery: { servicesChecked: registry.length, httpCalls },
+    discovery: { servicesChecked: registry.length, httpCalls: httpCalls + paymentsHttpCalls },
     selection: {
-      serviceId: selected.service.id,
-      description: selected.service.description,
-      amountTinybars: String(actual),
-      amountHbar: amountHbar(actual),
-      network: selected.requirement.network,
-      asset: "HBAR",
+      serviceId: first.serviceId,
+      description: first.description,
+      amountTinybars: String(first.amountTinybars),
+      amountHbar: amountHbar(first.amountTinybars),
+      network: first.network,
+      asset: first.asset,
     },
-    result: {
-      resource: String(body.resource),
-      message: typeof body.message === "string" ? body.message : "Service returned a valid paid resource.",
-      body,
-    },
+    result: lastResult,
     expenditure: {
-      reservedTinybars: String(actual),
-      reservedHbar: amountHbar(actual),
-      paidCalls: 1,
+      reservedTinybars: String(totalReservedTinybars),
+      reservedHbar: amountHbar(totalReservedTinybars),
+      paidCalls: receipts.length,
       budgetTinybars: String(limits.budgetTinybars),
       budgetHbar: amountHbar(limits.budgetTinybars),
     },
-    receipts: [{
-      serviceId: selected.service.id,
-      transactionId,
-      explorerUrl: `https://hashscan.io/testnet/transaction/${encodeURIComponent(transactionId)}`,
-      amountTinybars: String(actual),
-      amountHbar: amountHbar(actual),
-      status: "settled",
-    }],
+    receipts,
+    warnings,
   };
 }
