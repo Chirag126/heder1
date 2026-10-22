@@ -115,7 +115,6 @@ app.get("/api/health", async () => ({
   network: process.env.HEDERA_NETWORK ?? "testnet",
   phase: "phase-12-durable-payment-infrastructure",
   storage: databaseConfigured() ? "postgresql-configured" : process.env.NODE_ENV === "production" ? "postgresql-missing" : "local-development-only",
-  paymentExecutionEnabled: false,
 }));
 
 app.get("/api", async () => ({
@@ -271,8 +270,8 @@ app.get("/api/agent/status", async () => ({
     maxPaymentTinybars: String(FIREWALL_MAX_PAYMENT_TINYBARS),
     dailyBudgetTinybars: String(FIREWALL_DAILY_BUDGET_TINYBARS),
     maxAttemptsPerUtcDay: FIREWALL_MAX_ATTEMPTS_PER_DAY,
-    ledger: "persistent-local-json",
-    multiInstanceSafe: false,
+    ledger: databaseConfigured() ? "postgresql-transactional" : "local-json-development-only",
+    multiInstanceSafe: databaseConfigured(),
   },
 }));
 
