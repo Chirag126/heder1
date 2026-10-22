@@ -432,7 +432,14 @@ app.get<{ Querystring: { limit?: string } }>("/api/agent/v2/reservations", async
  * Operator-confirmed reconciliation only. Verify HashScan/Mirror Node evidence first.
  * An ambiguous outcome never releases reserved budget; only a confirmed failure does.
  */
-app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", async (request, reply) => {
+app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["reservationId","outcome","note"], properties: {
+    reservationId: { type: "string", minLength: 1, maxLength: 80, pattern: "^[a-zA-Z0-9-]+$" },
+    outcome: { type: "string", enum: ["settled","failed","ambiguous"] },
+    transactionId: { type: "string", maxLength: 200 },
+    note: { type: "string", minLength: 1, maxLength: 500 },
+  } } },
+}, async (request, reply) => {
   if (!reconciliationAuthorized(request.headers["x-heder1-reconciliation-token"])) return reply.code(403).send({ error: "Reservation reconciliation is not configured or authorized." });
   const body = request.body;
   if (typeof body?.reservationId !== "string" || !["settled", "failed", "ambiguous"].includes(String(body.outcome)) || typeof body.note !== "string" || !body.note.trim()) {
