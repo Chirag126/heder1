@@ -5,7 +5,8 @@ type Eip1193Provider = { request(args: { method: string; params?: unknown[] | ob
 declare global { interface Window { ethereum?: Eip1193Provider } }
 type AuditRecord = { id: string; sequence: number; timestamp: string; event: string; outcome: string; hash: string; details: Record<string, unknown> };
 type DashboardData = {
-  health?: { status: string; service: string; network: string };\n  networks?: { selectedNetwork: string; enabledNetworks: string[]; mainnet: { availableForReadinessReview: boolean; paymentExecutionEnabled: boolean; reason: string } };
+  health?: { status: string; service: string; network: string };
+  networks?: { selectedNetwork: string; enabledNetworks: string[]; mainnet: { availableForReadinessReview: boolean; paymentExecutionEnabled: boolean; reason: string } };
   x402?: { network: string; sdkConfigured: boolean; accountId: string | null; receiverAccountId: string | null; paymentExecutionEnabled: boolean; reason: string };
   agentV2?: { enabled: boolean; killSwitchEnabled?: boolean; paymentExecutionEnabled: boolean };
   agent?: { enabled: boolean; policy: { maxAmountHbar: string; allowedResource: string; note: string }; spendingFirewall: { maxPaymentTinybars: string; dailyBudgetTinybars: string; maxAttemptsPerUtcDay: number; ledger: string; multiInstanceSafe: boolean } };
@@ -20,7 +21,8 @@ const shorten = (value: string, start = 10, end = 7) => value.length > start + e
 const hashscanTx = (id: string) => "https://hashscan.io/testnet/transaction/" + encodeURIComponent(id);
 
 export default function App() {
-  const [data, setData] = useState<DashboardData>({});\n  const [networkMode, setNetworkMode] = useState("hedera:testnet");
+  const [data, setData] = useState<DashboardData>({});
+  const [networkMode, setNetworkMode] = useState("hedera:testnet");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [wallet, setWallet] = useState("");
@@ -56,7 +58,8 @@ export default function App() {
     };
     try {
       const [health, networks, x402, agent, agentV2, audit, anchors, history] = await Promise.all([
-        get<NonNullable<DashboardData["health"]>>("/api/health"),\n        get<NonNullable<DashboardData["networks"]>>("/api/networks"),
+        get<NonNullable<DashboardData["health"]>>("/api/health"),
+        get<NonNullable<DashboardData["networks"]>>("/api/networks"),
         get<NonNullable<DashboardData["x402"]>>("/api/x402/status"),
         get<NonNullable<DashboardData["agent"]>>("/api/agent/status"),
         get<NonNullable<DashboardData["agentV2"]>>("/api/agent/v2/status"),
@@ -64,7 +67,8 @@ export default function App() {
         get<NonNullable<DashboardData["anchors"]>>("/api/audit/anchors"),
         get<{ records: AuditRecord[] }>("/api/audit/records?limit=100"),
       ]);
-      setData({ health, networks, x402, agent, agentV2, audit, anchors, history: history.records });\n      if (networks.enabledNetworks.includes(networkMode)) setNetworkMode(networks.selectedNetwork);
+      setData({ health, networks, x402, agent, agentV2, audit, anchors, history: history.records });
+      if (networks.enabledNetworks.includes(networkMode)) setNetworkMode(networks.selectedNetwork);
       if (!verifyInput.topicId && anchors.anchors[0]) {
         const latest = anchors.anchors[anchors.anchors.length - 1];
         setVerifyInput({ topicId: latest.topicId, sequenceNumber: String(latest.sequenceNumber), auditHash: latest.auditRecordHash });
