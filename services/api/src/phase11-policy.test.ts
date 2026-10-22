@@ -41,7 +41,7 @@ test("policy simulation rejects task and daily budget overspend", () => {
 test("policy simulation rejects unapproved services, assets, networks, expiry, and kill switch", () => {
   assert.match(simulateSpendingPolicy(policy(), quote({ serviceId: "unknown" })).reason, /allowlist/);
   assert.match(simulateSpendingPolicy(policy(), quote({ asset: "USDC" })).reason, /asset allowlist/);
-  assert.match(simulateSpendingPolicy(policy(), quote({ network: "hedera:mainnet" })).reason, /network/);
+  assert.match(simulateSpendingPolicy(policy(), quote({ network: "hedera:mainnet" } as Partial<PolicyQuote> & { network: string })).reason, /network/);
   assert.match(simulateSpendingPolicy(policy({ expiresAt: now }), quote()).reason, /expired/);
   assert.match(simulateSpendingPolicy(policy(), quote(), true).reason, /kill switch/);
 });
