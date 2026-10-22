@@ -78,12 +78,17 @@ export async function appendAuditEvent(input: AuditInput): Promise<AuditRecord &
     const record: AuditRecord = { ...base, hash: recordHash(base) };
     await appendFile(path, JSON.stringify(record) + "\n", { encoding: "utf8", mode: 0o600, flag: "a" });
     await chmod(path, 0o600);
-    await storeAuditMetadata({
-      walletAddress: typeof input.details?.account === "string" ? input.details.account : undefined,
-      eventType: input.event,
-      entityId: typeof input.details?.runId === "string" ? input.details.runId : typeof input.details?.reservationId === "string" ? input.details.reservationId : undefined,
-      metadata: { outcome: input.outcome, sequence: record.sequence, hash: record.hash, ...(input.details ?? {}) },
-    });
+    try {
+      await storeAuditMetadata({
+        walletAddress: typeof input.details?.account === "string" ? input.details.account : undefined,
+        eventType: input.event,
+        entityId: typeof input.details?.runId === "string" ? input.details.runId : typeof input.details?.reservationId === "string" ? input.details.reservationId : undefined,
+        metadata: { outcome: input.outcome, sequence: record.sequence, hash: record.hash, ...(input.details ?? {}) },
+      });
+    } catch (error) {
+      // The local hash-chain record already exists. A secondary metadata outage must not turn a confirmed payment into an apparent failure.
+      console.error("PostgreSQL audit metadata write failed; local hash-chain record was retained.", error instanceof Error ? error.message : "unknown error");
+    }
     const hcsAnchor = await anchorAuditRecord(record);
     return hcsAnchor ? { ...record, hcsAnchor } : record;
   } finally {
