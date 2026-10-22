@@ -5,6 +5,7 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
+import { reconcileDurableReservation } from "./spending-ledger.js";
 import type { ApprovedPaymentQuote } from "./payment-approval.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import {
@@ -316,6 +317,19 @@ export async function runAgentV2Task(
         break;
       }
       const transactionId = payment.transaction.trim();
+      if (reservation.reservationId) {
+        try {
+          const reconciled = await reconcileDurableReservation({
+            reservationId: reservation.reservationId,
+            outcome: "settled",
+            transactionId,
+            note: "Settlement receipt validated by the agent runner; independently verify on HashScan/Mirror Node.",
+          });
+          if (!reconciled.updated) warnings.push(`Payment settled but reservation ${reservation.reservationId} needs operator reconciliation: ${"reason" in reconciled ? reconciled.reason : "unknown ledger result"}`);
+        } catch (error) {
+          warnings.push(`Payment settled but reservation ${reservation.reservationId} could not be marked settled in the ledger: ${error instanceof Error ? error.message : "unknown ledger error"}`);
+        }
+      }
       receipts.push({
         serviceId: candidate.service.id,
         transactionId,
