@@ -5,7 +5,7 @@ import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { getX402Configuration } from "./x402.js";
 import { reserveAgentV2Spend } from "./spending-firewall.js";
-import { reconcileDurableReservation } from "./spending-ledger.js";
+import { reconcileDurableReservation, transitionDurableReservation } from "./spending-ledger.js";
 import type { ApprovedPaymentQuote } from "./payment-approval.js";
 import { DEFAULT_USER_SPENDING_POLICY, simulateSpendingPolicy, validateUserSpendingPolicy, type UserSpendingPolicy } from "./spending-policy.js";
 import {
@@ -143,7 +143,7 @@ export function isAgentV2Enabled(): boolean {
  */
 export async function runAgentV2Task(
   input: AgentV2TaskInput,
-  options: { signal: AbortSignal; runId?: string; approvedQuote?: ApprovedPaymentQuote },
+  options: { signal: AbortSignal; runId?: string; approvedQuote?: ApprovedPaymentQuote; accountId?: string },
 ): Promise<AgentV2TaskResult> {
   if (!isAgentV2Enabled()) throw new Error("Agent v2 is disabled. Enable HEDERA_AGENT_V2_ENABLED=true for local Hedera Testnet development only.");
   if (process.env.HEDERA_AGENT_KILL_SWITCH === "true") throw new Error("Emergency kill switch is enabled; agent payments are stopped.");
@@ -267,6 +267,7 @@ export async function runAgentV2Task(
       taskId: runId,
       taskBudgetTinybars: limits.budgetTinybars,
       maxPaidCallsPerTask: limits.maxPaidCalls,
+      accountId: options.accountId,
     });
     if (!reservation.allowed) {
       warnings.push(`Stopped before ${candidate.service.id}: ${reservation.reason}`);
@@ -298,6 +299,14 @@ export async function runAgentV2Task(
         warnings.push(`Reservation for ${candidate.service.id} retained because safety state changed before payment delivery.`);
         break;
       }
+      if (reservation.reservationId) {
+        const submitted = await transitionDurableReservation({
+          reservationId: reservation.reservationId,
+          status: "submitted",
+          note: "x402 payment request is about to be delivered; reconcile before any retry if the outcome is uncertain.",
+        });
+        if (!submitted.updated) throw new Error("Could not persist submitted payment state; payment was not sent.");
+      }
       const response = await paidFetch(candidate.service.url, {
         method: "GET",
         redirect: "error",
@@ -307,6 +316,7 @@ export async function runAgentV2Task(
       paymentsHttpCalls += 2;
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok || !isRecord(body) || !isRecord(body.payment)) {
+        if (reservation.reservationId) await transitionDurableReservation({ reservationId: reservation.reservationId, status: "unknown", note: `Facilitator response HTTP ${response.status} did not contain a valid settlement receipt; reconcile before retry.` });
         warnings.push(`${candidate.service.id} did not return a valid settlement receipt (HTTP ${response.status}); its reservation remains held for reconciliation.`);
         break;
       }
@@ -315,6 +325,7 @@ export async function runAgentV2Task(
           payment.status !== "settled" ||
           typeof payment.transaction !== "string" || !payment.transaction.trim() ||
           body.amountTinybars !== candidate.requirement.amount) {
+        if (reservation.reservationId) await transitionDurableReservation({ reservationId: reservation.reservationId, status: "unknown", note: "Payment response failed receipt validation; reconcile before retry." });
         warnings.push(`${candidate.service.id} failed receipt validation; its reservation remains held for reconciliation.`);
         break;
       }
@@ -354,6 +365,9 @@ export async function runAgentV2Task(
         body,
       };
     } catch (error) {
+      if (reservation.reservationId) {
+        try { await transitionDurableReservation({ reservationId: reservation.reservationId, status: "unknown", note: "Payment call threw or timed out; settlement may have occurred. Reconcile before retrying." }); } catch { /* preserve conservative reservation even if the state store is unavailable */ }
+      }
       warnings.push(`${candidate.service.id} payment outcome is uncertain: ${error instanceof Error ? error.message : "unknown payment error"}. Reservation remains held; reconcile before retrying.`);
       break;
     }
