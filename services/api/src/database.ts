@@ -243,6 +243,43 @@ export async function consumeRateLimit(key: string, limit: number, windowMs: num
 const localRateLimits = new Map<string, { startedAt: number; count: number }>();
 
 
+
+export type PaymentProofClaim =
+  | { claimed: true }
+  | { claimed: false; status: "settled"; transactionId: string; settledAt: string }
+  | { claimed: false; status: "processing" | "rejected" | "unknown" };
+
+export async function claimPaymentProof(proofHash: string, servicePath: string): Promise<PaymentProofClaim> {
+  await ensureDatabaseReady();
+  const db = getDatabasePool()!;
+  const inserted = await db.query(
+    "INSERT INTO payment_proofs(proof_hash,service_path,status) VALUES($1,$2,'processing') ON CONFLICT(proof_hash) DO NOTHING RETURNING proof_hash",
+    [proofHash, servicePath],
+  );
+  if (inserted.rowCount) return { claimed: true };
+  const existing = await db.query("SELECT status,transaction_id,settled_at FROM payment_proofs WHERE proof_hash=$1", [proofHash]);
+  if (!existing.rowCount) throw new Error("Payment-proof state changed unexpectedly; refusing duplicate settlement.");
+  const row = existing.rows[0];
+  if (row.status === "settled" && typeof row.transaction_id === "string" && row.transaction_id) {
+    return { claimed: false, status: "settled", transactionId: row.transaction_id, settledAt: row.settled_at ? new Date(String(row.settled_at)).toISOString() : new Date().toISOString() };
+  }
+  return { claimed: false, status: row.status as "processing" | "rejected" | "unknown" };
+}
+
+export async function finishPaymentProof(input: {
+  proofHash: string; status: "settled" | "rejected" | "unknown"; transactionId?: string; settledAt?: string; errorCode?: string; response?: unknown;
+}): Promise<boolean> {
+  await ensureDatabaseReady();
+  const db = getDatabasePool()!;
+  const result = await db.query(
+    `UPDATE payment_proofs SET status=$2, transaction_id=COALESCE($3,transaction_id),
+       settled_at=COALESCE($4::timestamptz,settled_at), response=$5::jsonb, error_code=$6, updated_at=now()
+     WHERE proof_hash=$1 AND status IN ('processing','unknown')`,
+    [input.proofHash, input.status, input.transactionId ?? null, input.settledAt ?? null, input.response === undefined ? null : JSON.stringify(input.response), input.errorCode ?? null],
+  );
+  return Boolean(result.rowCount);
+}
+
 export async function storeAuditMetadata(input: { walletAddress?: string; eventType: string; entityId?: string; metadata?: Record<string, unknown> }): Promise<void> {
   if (!databaseConfigured()) return;
   await ensureDatabaseReady();
