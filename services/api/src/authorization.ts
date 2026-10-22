@@ -23,6 +23,7 @@ export function createAuthorizationChallenge(
   accountInput: string,
   now = Date.now(),
   requestedScope: string = AUTHORIZATION_SCOPE,
+  requestedPolicy?: UserSpendingPolicy,
 ) {
   prune(now);
   let account: string;
@@ -32,8 +33,11 @@ export function createAuthorizationChallenge(
     throw new Error("Requested authorization scope is not supported.");
   }
   const scope = requestedScope as AuthorizationScope;
-  const nonce = randomBytes(32).toString("hex");
   const expiresAt = now + AUTHORIZATION_TTL_MS;
+  const policy: UserSpendingPolicy = { ...DEFAULT_USER_SPENDING_POLICY, ...requestedPolicy, expiresAt: Math.min(requestedPolicy?.expiresAt ?? expiresAt, expiresAt) };
+  const policyErrors = validateUserSpendingPolicy(policy);
+  if (policyErrors.length) throw new Error(policyErrors.join(" "));
+  const nonce = randomBytes(32).toString("hex");
   const phaseTwo = scope === AUTHORIZATION_SCOPE_V2;
   const message = [
     phaseTwo ? "heder1 bounded autonomous agent v2 authorization" : "heder1 one-time payment authorization",
