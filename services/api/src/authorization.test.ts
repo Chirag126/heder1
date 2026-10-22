@@ -13,8 +13,8 @@ test("wallet signature grants one bounded agent invocation and token is single-u
   const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature, now: 1_000_001 });
   assert.equal(grant.account.toLowerCase(), wallet.address.toLowerCase());
   assert.equal(grant.singleUse, true);
-  assert.equal(await consumeAuthorizationGrant(grant.authorizationToken, 1_000_002).allowed, true);
-  assert.equal(await consumeAuthorizationGrant(grant.authorizationToken, 1_000_003).allowed, false);
+  assert.equal((await consumeAuthorizationGrant(grant.authorizationToken, 1_000_002)).allowed, true);
+  assert.equal((await consumeAuthorizationGrant(grant.authorizationToken, 1_000_003)).allowed, false);
 });
 
 test("authorization rejects a signature from the wrong wallet and burns the challenge", async () => {
@@ -33,8 +33,8 @@ test("authorization rejects a signature from the wrong wallet and burns the chal
 
 test("authorization rejects expired and missing grants", async () => {
   const challenge = await createAuthorizationChallenge(wallet.address, 3_000_000);
-  assert.equal(await consumeAuthorizationGrant(undefined, 3_000_001).allowed, false);
-  assert.equal(await consumeAuthorizationGrant("not-a-grant", 3_000_001).allowed, false);
+  assert.equal((await consumeAuthorizationGrant(undefined, 3_000_001)).allowed, false);
+  assert.equal((await consumeAuthorizationGrant("not-a-grant", 3_000_001)).allowed, false);
   assert.ok(challenge.expiresAt);
 });
 
@@ -47,8 +47,8 @@ test("Phase 10 authorization is explicit, bounded, and cannot be consumed by the
   const signature = await wallet.signMessage(challenge.message);
   const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature, now: 4_000_001 });
   assert.equal(grant.scope, AUTHORIZATION_SCOPE_V2);
-  assert.equal(await consumeAuthorizationGrant(grant.authorizationToken, 4_000_002).allowed, false);
-  assert.equal(await consumeAuthorizationGrant(grant.authorizationToken, 4_000_002, AUTHORIZATION_SCOPE_V2).allowed, true);
+  assert.equal((await consumeAuthorizationGrant(grant.authorizationToken, 4_000_002)).allowed, false);
+  assert.equal((await consumeAuthorizationGrant(grant.authorizationToken, 4_000_002, AUTHORIZATION_SCOPE_V2)).allowed, true);
 });
 
 test("Phase 11 signed policy is included in the wallet message and unused grants can be revoked", async () => {
@@ -72,5 +72,5 @@ test("Phase 11 signed policy is included in the wallet message and unused grants
   const grant = await verifyAuthorizationChallenge({ nonce: challenge.nonce, signature, now: now + 1 });
   assert.equal(grant.policy.maxPaymentTinybars, 40_000);
   assert.deepEqual(await revokeAuthorizationGrant(grant.authorizationToken), { revoked: true });
-  assert.equal(await consumeAuthorizationGrant(grant.authorizationToken, now + 2, AUTHORIZATION_SCOPE_V2).allowed, false);
+  assert.equal((await consumeAuthorizationGrant(grant.authorizationToken, now + 2, AUTHORIZATION_SCOPE_V2)).allowed, false);
 });
