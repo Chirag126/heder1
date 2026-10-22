@@ -115,7 +115,7 @@ app.post<{ Body: { nonce?: string; signature?: string } }>("/api/authorization/v
 app.post<{ Body: { authorizationToken?: string } }>("/api/authorization/revoke", async (request, reply) => {
   const result = revokeAuthorizationGrant(request.body?.authorizationToken);
   if (!result.revoked) return reply.code(404).send(result);
-  await appendAuditEvent({ event: "authorization.grant_revoked", outcome: "accepted", details: { revoked: true } });
+  await appendAuditEvent({ event: "authorization.rejected", outcome: "accepted", details: { action: "grant_revoked", revoked: true } });
   return { revoked: true };
 });
 
