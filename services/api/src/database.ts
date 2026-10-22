@@ -215,7 +215,8 @@ export async function updateTaskRun(runId: string, walletAddress: string, status
 export async function consumeRateLimit(key: string, limit: number, windowMs: number): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number }> {
   const normalizedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
   const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
-  if (await ensureDatabaseReady()) {
+  if (databaseConfigured()) {
+    await ensureDatabaseReady();
     const db = getDatabasePool()!;
     const result = await db.query(
       `INSERT INTO api_rate_limits(bucket_key, window_started_at, request_count)
