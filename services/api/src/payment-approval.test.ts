@@ -29,7 +29,7 @@ test("quote-specific wallet approval is one-use and binds the exact payment", as
   const consumed = await consumePaymentApproval(verified.approvalToken);
   assert.equal(consumed.allowed, true);
   if (consumed.allowed) assert.equal(consumed.quote.receiverAccountId, "0.0.11044329");
-  assert.equal(await consumePaymentApproval(verified.approvalToken).allowed, false);
+  assert.equal((await consumePaymentApproval(verified.approvalToken)).allowed, false);
 });
 
 test("approval rejects unapproved services, expired policies, preview mode, and mismatched wallet signatures", async () => {
