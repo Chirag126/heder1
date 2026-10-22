@@ -84,7 +84,14 @@ function isHttpsServiceUrl(value: string): boolean {
 function positiveIntegerString(value: string): boolean {
   return /^(0|[1-9]\d*)$/.test(value) && BigInt(value) > 0n;
 }
-function asBigInt(value: unknown): bigint | undefined {\n  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);\n  if (typeof value === "string" && /^(0|[1-9]\\d*)$/.test(value)) { try { return BigInt(value); } catch { return undefined; } }\n  return undefined;\n}\nfunction record(value: unknown): Record<string, unknown> | undefined {
+function asBigInt(value: unknown): bigint | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  if (typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) {
+    try { return BigInt(value); } catch { return undefined; }
+  }
+  return undefined;
+}
+function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
