@@ -10,7 +10,7 @@ The web app uses hash-based routes so the existing Vite deployment can host all 
 
 - **Overview** (`#overview`): API and agent readiness, daily budget cap, local audit-chain status, current network, guided steps, recent task events, and the latest session receipt.
 - **Agent Playground** (`#playground`): editable task prompt (maximum 2,000 characters), no-payment quote preview, eligible service comparison, rejection reasons, task execution, warnings, and returned receipts.
-- **Spending & Permissions** (`#permissions`): EVM wallet connection, Hedera Testnet check (chain ID 296), preview/autonomous/approval-required mode, per-payment/task/daily limits, paid-call caps, service allowlist, one-time authorization, unused-grant revocation, and cancellation request.
+- **Spending & Permissions** (`#permissions`): EVM wallet connection, Hedera Testnet check (chain ID 296), preview/autonomous/approval-required mode, per-payment/task/daily limits, paid-call caps, service allowlist, one-time authorization, unused-grant revocation, cancellation request, and a browser-side pause for new task runs.
 - **Payments & Receipts** (`#payments`): session receipts and sanitized audit events related to agent runs, payment, settlement, and reservation state. Transaction links are shown only when a transaction ID is present in returned receipt data or audit metadata.
 - **Audit & HCS Evidence** (`#audit`): local hash-chain validity and head hash, indexed HCS anchors, Mirror Node hash verification, HashScan transaction links, and sanitized audit records.
 
@@ -33,7 +33,7 @@ The web app uses hash-based routes so the existing Vite deployment can host all 
 - The UI does not expose private keys, database credentials, facilitator secrets, or reconciliation tokens.
 - Testnet remains the only enabled payment network. Mainnet payment execution is not implemented or enabled.
 - The local task-run list is derived from sanitized audit records available through existing endpoints. It is not presented as a complete, independently indexed chain history.
-- Wallet and grant state remain in memory for the current browser session; this phase does not add persistence for wallet authorization.
+- Wallet, grant, and browser-pause state remain in memory for the current browser session; this phase does not add persistence for wallet authorization. The pause control blocks new authorization/run requests from this browser only; it is not a server-wide kill switch and does not stop an already submitted task. The API-side `HEDERA_AGENT_KILL_SWITCH` remains the server-wide emergency control.
 - HashScan links are not proof by themselves. A task response is not labeled as settlement success solely because the agent returned; the interface explains that the transaction ID should be verified independently. If the run request fails after submission, the UI warns that settlement is unknown and should be reconciled before retrying.
 
 ## Validation
