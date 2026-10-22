@@ -18,7 +18,9 @@ export type AuditEvent =
   | "mainnet.readiness_challenge_rejected"
   | "mainnet.readiness_challenge_issued"
   | "mainnet.readiness_grant_issued"
-  | "mainnet.readiness_grant_consumed";
+  | "mainnet.readiness_grant_consumed"
+  | "integration.hedera.account_queried"
+  | "integration.hedera.account_query_failed";
 
 export type AuditInput = {
   event: AuditEvent;
