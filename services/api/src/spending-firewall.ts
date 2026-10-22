@@ -70,7 +70,7 @@ async function readLedger(path: string): Promise<Ledger> {
  */
 export async function reserveAgentSpend(
   input: { amountTinybars: string; receiverAccountId: string; resourceUrl: string },
-  options: { path?: string; now?: Date } = {},
+  options: { path?: string; now?: Date; accountId?: string } = {},
 ): Promise<FirewallReservation> {
   const amount = Number(input.amountTinybars);
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > FIREWALL_MAX_PAYMENT_TINYBARS) {
@@ -95,6 +95,7 @@ export async function reserveAgentSpend(
     amountTinybars: amount,
     receiverAccountId: input.receiverAccountId,
     resourceUrl: input.resourceUrl,
+    accountId: options.accountId,
   }, {
     path: options.path,
     now: options.now,
