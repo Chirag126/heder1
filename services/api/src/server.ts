@@ -1,10 +1,12 @@
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { executeTestnetDemoPayment, getX402Configuration } from "./x402.js";
 import { handlePaidResource, handleShortSummaryResource, paidResourcePolicy } from "./paid-resource.js";
 import { isAgentEnabled, paymentAgentPolicy, runPaymentAgent } from "./agent.js";
 import { agentV2Policy, getApprovedServiceRegistry } from "./agent-v2.js";
 import { isAgentV2Enabled, runAgentV2Task, type AgentV2TaskInput } from "./agent-v2-runner.js";
 import { FIREWALL_DAILY_BUDGET_TINYBARS, FIREWALL_MAX_ATTEMPTS_PER_DAY, FIREWALL_MAX_PAYMENT_TINYBARS } from "./spending-firewall.js";
+import { listDurableReservations, reconcileDurableReservation } from "./spending-ledger.js";
 import { AUTHORIZATION_SCOPE_V2, consumeAuthorizationGrant, createAuthorizationChallenge, revokeAuthorizationGrant, verifyAuthorizationChallenge } from "./authorization.js";
 import { appendAuditEvent, listAuditRecords, verifyAuditTrail } from "./audit-trail.js";
 import { listHcsAnchors, verifyHcsAnchor } from "./hcs-audit.js";
@@ -34,7 +36,7 @@ app.addHook("onRequest", async (request, reply) => {
     reply.header("Access-Control-Allow-Origin", normalizedOrigin);
     reply.header("Vary", "Origin");
     reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, payment-signature");
+    reply.header("Access-Control-Allow-Headers", "content-type, x-heder1-authorization, x-heder1-reconciliation-token, payment-signature");
     reply.header("Access-Control-Max-Age", "600");
   }
   if (request.method === "OPTIONS") return reply.code(204).send();
@@ -257,6 +259,48 @@ app.get("/api/agent/v2/services", async () => ({
   })),
   note: "Price metadata is informational only. The runner inspects each service's actual HTTP 402 requirements before selecting.",
 }));
+
+type ReconciliationBody = { reservationId?: string; outcome?: "settled" | "failed" | "ambiguous"; transactionId?: string; note?: string };
+function reconciliationAuthorized(token: unknown): boolean {
+  const expected = process.env.HEDERA_RECONCILIATION_TOKEN;
+  if (!expected || typeof token !== "string") return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Operator-only reservation ledger view. Requires HEDERA_RECONCILIATION_TOKEN. */
+app.get<{ Querystring: { limit?: string } }>("/api/agent/v2/reservations", async (request, reply) => {
+  if (!reconciliationAuthorized(request.headers["x-heder1-reconciliation-token"])) return reply.code(403).send({ error: "Reservation ledger access is not configured or authorized." });
+  const limit = Number(request.query.limit ?? 100);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) return reply.code(400).send({ error: "limit must be an integer from 1 to 500." });
+  try { return { reservations: await listDurableReservations({ limit }) }; }
+  catch (error) { return reply.code(500).send({ error: error instanceof Error ? error.message : "Could not read reservation ledger." }); }
+});
+
+/**
+ * Operator-confirmed reconciliation only. Verify HashScan/Mirror Node evidence first.
+ * An ambiguous outcome never releases reserved budget; only a confirmed failure does.
+ */
+app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", async (request, reply) => {
+  if (!reconciliationAuthorized(request.headers["x-heder1-reconciliation-token"])) return reply.code(403).send({ error: "Reservation reconciliation is not configured or authorized." });
+  const body = request.body;
+  if (typeof body?.reservationId !== "string" || !["settled", "failed", "ambiguous"].includes(String(body.outcome)) || typeof body.note !== "string" || !body.note.trim()) {
+    return reply.code(400).send({ updated: false, error: "reservationId, outcome (settled|failed|ambiguous), and an operator note are required." });
+  }
+  if (body.note.length > 500) return reply.code(400).send({ updated: false, error: "note must be at most 500 characters." });
+  try {
+    const result = await reconcileDurableReservation({
+      reservationId: body.reservationId,
+      outcome: body.outcome as "settled" | "failed" | "ambiguous",
+      transactionId: body.transactionId,
+      note: body.note,
+    });
+    if (!result.updated) return reply.code(409).send(result);
+    await appendAuditEvent({ event: "agent.run_finished", outcome: body.outcome === "failed" ? "failed" : "accepted", details: { phase: "11", action: "reservation_reconciled", reservationId: body.reservationId, outcome: body.outcome, transactionId: body.transactionId ?? null } });
+    return result;
+  } catch (error) { return reply.code(500).send({ updated: false, error: error instanceof Error ? error.message : "Could not reconcile reservation." }); }
+});
 
 app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", async (request, reply) => {
   if (!isAgentV2Enabled()) {
