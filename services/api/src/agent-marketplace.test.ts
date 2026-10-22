@@ -20,11 +20,15 @@ test("buyer selects cheapest eligible live quote when task intent is generic", (
   assert.equal(result.selected?.serviceId, "heder1-short-summary");
   assert.equal(result.selected?.amountTinybars, 50_000);
   assert.equal(result.paymentAttempted, false);
+  assert.equal(result.rounds, 2);
+  assert.ok(result.negotiationLog.some((entry) => entry.action === "select-offer"));
 });
 
 test("buyer honors explicit capability preference when the preferred provider is eligible", () => {
   const result = negotiateMarketplaceOffers({ goal: "Create a detailed full report", budgetTinybars: 100_000, offers });
   assert.equal(result.selected?.serviceId, "heder1-full-report");
+  assert.equal(result.offers.find((offer) => offer.serviceId === "heder1-full-report")?.negotiation.response, "accepted");
+  assert.equal(result.offers.find((offer) => offer.serviceId === "heder1-short-summary")?.negotiation.response, "countered");
 });
 
 test("buyer rejects offers outside budget and does not attempt payment", () => {
@@ -36,6 +40,8 @@ test("buyer rejects offers outside budget and does not attempt payment", () => {
   assert.equal(result.selected, null);
   assert.equal(result.decision, "no-eligible-offer");
   assert.equal(result.paymentAttempted, false);
+  assert.ok(result.offers.every((offer) => offer.negotiation.response !== "accepted"));
+  assert.ok(result.negotiationLog.some((entry) => entry.action === "no-agreement"));
 });
 
 test("goal and budget are validated", () => {

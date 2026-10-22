@@ -1,69 +1,55 @@
 # Phase 18 — Agent marketplace negotiation
 
-## Goal
+## User jobs: intentionally separate pages
 
-Add a safe marketplace layer on top of the existing Phase 10 x402 quote discovery and payment runner. A buyer agent discovers provider-agent cards, evaluates their live HTTP 402 quotes, chooses a provider based on task intent and budget, and can then hire that provider through the existing wallet-authorized runner.
+- **Agent Marketplace — discover, compare, and choose.** A buyer workflow asks registered provider adapters for live x402 quotes, compares advertised capability fit and price, shows provider acceptance/rejection/advisory counter-offers and a negotiation transcript, then hands the selected goal and single-service allowlist to the Playground.
+- **Agent Playground — authorize and execute.** A direct task-running workspace with quote preview, spending policy, wallet consent/authorization, execution, and receipts. The Playground does not require a Marketplace selection to run an approved task.
+- Neither page performs the other's job. Marketplace negotiation never pays; the Playground remains the only page for executing a paid task.
 
-## What is implemented
+## Marketplace workflow implemented
 
-- `GET /.well-known/agent-card.json`: a discovery descriptor for the Heder1 buyer agent.
-- `GET /api/marketplace/agents`: two local provider-agent cards, each with a distinct ID, capabilities, service binding, network/asset support, and explicit local-unverified identity status.
-- Dashboard **Agent Marketplace** page: submit a goal and budget, compare discovered provider offers, inspect each offer's capability and identity status, and move the selected provider into the existing Agent Playground. The UI never pays directly from the negotiation button.
-- `POST /api/marketplace/negotiate`: discovers the live x402 quotes through the existing preview planner, filters them against the buyer's budget and existing 100,000-tinybar per-payment ceiling, evaluates task intent, and returns a deterministic offer decision.
-- Audit event `marketplace.negotiation_completed` records only the negotiation summary, not secrets or payment proofs.
-- Unit tests cover provider identities, price selection, capability preference, budget rejection, and invalid input.
-- The negotiation endpoint never signs, reserves, or submits a payment. It is safe to call as a preview.
+- `GET /.well-known/agent-card.json`: Heder1 buyer-agent descriptor (not a claim of full A2A conformance).
+- `GET /api/marketplace/agents`: two local provider adapters with distinct IDs, capabilities, service bindings, Testnet/HBAR support, and explicit local-unverified identity status.
+- `POST /api/marketplace/negotiate`: discovers live quotes through the existing Phase 10 preview planner; provider adapters accept, reject or return an advisory alternative when requested task intent does not match. The buyer selects an accepted offer by task intent and price, within the declared budget and 100,000-tinybar per-payment ceiling.
+- A two-round transcript is included in the response and UI: buyer request, provider responses, and buyer decision.
+- `marketplace.negotiation_completed` records a sanitized summary in the existing audit trail. Existing optional HCS anchoring can anchor audit hashes when configured.
+- Tests check registry, selection, provider decisions, budget rejection, transcript, and validation.
 
-## Run locally
+## Critical pricing boundary
 
-Keep Heder1 bound to `127.0.0.1` and on Hedera Testnet. Start the API, then:
+The provider's x402 resource is authoritative for the payable amount. Counter-offers in this deterministic local negotiation layer are **advisory only**; they do not modify the resource server's price, and the payment runner must rediscover the live quote. A counter-offer must never be represented as a settled or discounted price. Providers are local adapters, not independent hosted agents. This bounded transcript advances Idea 2 but does not claim full standards-conformant A2A JSON-RPC or ACP.
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:4000/.well-known/agent-card.json
-Invoke-RestMethod http://127.0.0.1:4000/api/marketplace/agents
+## Hire an offer
 
-$body = @{
-  goal = "Create a detailed full report"
-  budgetTinybars = 100000
-} | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:4000/api/marketplace/negotiate -ContentType "application/json" -Body $body
-```
+1. In Marketplace, enter a task and maximum budget, then click **Discover & negotiate offers**.
+2. Read both provider cards and the negotiation transcript. Identity remains explicitly unverified.
+3. Select **Continue to task authorization** after a provider is selected.
+4. In Playground, review the goal, confirm Hedera Testnet, choose preview/autonomous/approval-required policy, and ensure the allowlist is restricted to the selected provider.
+5. Provide required wallet authorization or quote-specific approval and execute. The runner re-discovers the live quote and enforces the signed policy, reservation ledger, kill switch, and receipt validation; it does not trust the Marketplace result as authorization.
+6. Check transaction evidence independently on HashScan Testnet. Open Audit & HCS Evidence for local hash-chain status and any public HCS anchor.
 
-The full-report provider should win when its live quote is within budget and the goal clearly requests a detailed/full report. A generic report goal selects the cheapest eligible quote. If the budget is below every live quote, no offer is selected.
+## Already implemented; reused, not duplicated
 
-## Hire the selected provider
+- Per-payment/task/daily caps, service allowlisting, native-HBAR/Testnet restrictions, wallet-signed one-time authorization, quote-specific approval, reservation/idempotency controls, and emergency kill switch remain in the existing payment pipeline.
+- Local SHA-256 hash-chained audit records and optional HCS anchoring/verification are existing features. The UI points users to Audit & HCS Evidence instead of adding a second audit engine.
+- Read-only Hedera Testnet account context exists in Phase 15. Agent Kit and hosted Network MCP were evaluated but not added as runtime dependencies.
 
-Negotiation is intentionally separate from payment. To hire the returned `selected.serviceId`:
+## Remaining sponsor extras — do not claim as implemented
 
-1. Use the existing dashboard wallet authorization flow with the current spending policy. Keep the policy in autonomous mode only if you intend to pay without quote-specific approval.
-2. Generate a fresh UUID and send `POST /api/agent/v2/run` with that `runId`, the same `goal`, a budget within the signed task budget, and `allowedServiceIds: [selected.serviceId]`.
-3. Send the fresh `x-heder1-authorization` grant in the header.
-4. The existing runner re-discovers the live HTTP 402 quote and re-applies the signed network, asset, receiver, per-payment cap, task budget, spending ledger, kill switch, and settlement validation. It does not trust the negotiation result as payment authorization.
-5. Verify the returned transaction independently on HashScan Testnet and verify the audit record as described in `QualificationCheckREADME.md`.
+- **HCS-14 or ERC-8004 identity/reputation:** provider IDs remain local and unverified. No registry contract or UAID verifier is wired.
+- **HTS/USDC settlement:** payment remains native HBAR (`0.0.0`) only; do not try token payment through the HBAR-only runner.
+- **Recurring payments via Scheduled Transactions:** no recurring billing workflow exists.
+- **Runtime Hedera Agent Kit / Network MCP:** Phase 15's Mirror Node account query is not an Agent Kit or hosted MCP runtime integration.
+- **Full A2A/ACP:** this local negotiation envelope is not full protocol conformance; independent providers and standard task/message lifecycle remain future work.
 
-Do not retry an uncertain payment until HashScan/Mirror Node and the reservation state have been checked.
-
-## Boundaries and remaining work
-
-This is an additive deterministic local marketplace slice, not a claim that Heder1 is now a full A2A or ACP implementation. Provider adapters are local modules rather than independently hosted agent processes. Provider prices are immutable live x402 quotes; negotiation chooses among offers and does not modify the amount that the resource server requires. The card IDs are local identifiers, not HCS-14 or ERC-8004 verifiable identities.
-
-The following sponsor extras remain **not implemented** and must not be claimed in a submission:
-- HCS-14 / ERC-8004 identity and reputation registry.
-- HTS token / USDC settlement. Current runner is HBAR-only (`0.0.0`).
-- Hedera Scheduled Transactions recurring payments.
-- Runtime Hedera Agent Kit or hosted Network MCP integration.
-- Full standards-conformant A2A JSON-RPC task lifecycle or ACP negotiation.
-- Independent third-party provider deployments.
-
-These are intentionally deferred instead of being represented by mock integrations or untested payment paths. Each requires a separate, integration-specific implementation and tests.
+These integrations need their own verified protocol contract, configuration, keys, and live end-to-end validation. This PR must not advertise them as live features.
 
 ## Safety and compatibility
 
-- No existing x402 route, payment engine, wallet authorization scope, spending policy, database schema, HCS audit code, or package dependency is changed.
-- The new negotiation endpoint only calls the existing preview planner; it never creates a signer or makes a payment.
-- The paid hiring step uses the existing runner, not a new payment implementation.
-- Network is fixed to Hedera Testnet; native HBAR is the only asset offered.
-- This implementation does not make the project production-ready.
+- No new payment engine, signer, wallet authorization scope, spending policy, database schema, or runtime package is introduced.
+- Marketplace negotiation is preview-only with `paymentAttempted: false`; selections cannot bypass wallet authorization.
+- Hedera Testnet and native HBAR remain the only supported payment network/asset.
+- HCS anchoring is optional and requires valid Testnet topic/operator configuration. Missing anchor evidence does not prove an anchor exists.
 
 ## Tests
 
@@ -78,5 +64,7 @@ pnpm build
 - Hedera x402: https://docs.hedera.com/solutions/ai/x402
 - Hedera x402 flow: https://docs.hedera.com/solutions/ai/x402/how-it-works
 - A2A protocol specification: https://a2a-protocol.org/v1.0.0/specification/
+- HCS-14 UAID: https://hol.org/docs/standards/hcs-14/
+- ERC-8004 Trustless Agents: https://eips.ethereum.org/EIPS/eip-8004
 - Heder1 Phase 10 runner: ./PHASE-10.md
 - Heder1 acceptance guide: ../QualificationCheckREADME.md
