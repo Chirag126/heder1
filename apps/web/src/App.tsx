@@ -73,6 +73,7 @@ export default function App() {
   const [marketplaceGoal, setMarketplaceGoal] = useState("Create a detailed full report");
   const [marketplaceBudget, setMarketplaceBudget] = useState("100000");
   const [marketplaceResult, setMarketplaceResult] = useState<MarketplaceNegotiation | null>(null);
+  const [selectedMarketplaceServiceId, setSelectedMarketplaceServiceId] = useState<string>("");
   const [allowedServiceIds, setAllowedServiceIds] = useState<string[]>(["heder1-full-report", "heder1-short-summary"]);
   const navigate = (next: PageId) => {
     window.location.hash = next;
@@ -246,7 +247,7 @@ export default function App() {
     finally { setBusy(""); setActiveRunId(""); }
   }
   async function negotiateMarketplace() {
-    setBusy("marketplace"); setError(""); setNotice(""); setMarketplaceResult(null);
+    setBusy("marketplace"); setError(""); setNotice(""); setMarketplaceResult(null); setSelectedMarketplaceServiceId("");
     try {
       const budgetTinybars = Number(marketplaceBudget);
       if (!Number.isSafeInteger(budgetTinybars) || budgetTinybars < 1 || budgetTinybars > 500000) throw new Error("Marketplace budget must be between 1 and 500000 tinybars.");
@@ -254,11 +255,7 @@ export default function App() {
       const result = await response.json() as MarketplaceNegotiation;
       if (!response.ok) throw new Error(result.error ?? "Marketplace negotiation failed.");
       setMarketplaceResult(result);
-      if (result.selected) {
-        setTaskGoal(marketplaceGoal.trim());
-        setAllowedServiceIds([result.selected.serviceId]);
-        setNotice("Offer selected. No payment was attempted. Review spending permissions and continue to Agent Playground when ready to hire this provider.");
-      } else setNotice("No eligible offer was selected. No payment was attempted.");
+      setNotice(result.offers.length ? "Offers discovered. The buyer agent recommendation is advisory: choose an eligible provider below. No payment was attempted." : "No provider offers were returned. No payment was attempted.");
     } catch (e) { setError(e instanceof Error ? e.message : "Marketplace negotiation failed."); }
     finally { setBusy(""); }
   }
@@ -413,17 +410,20 @@ export default function App() {
       </section>
       {marketplaceResult && <>
         <section className="panel wide-panel">
-          <div className="panel-head"><div><p className="dash-kicker">02 / PROVIDER OFFERS</p><h2>{marketplaceResult.selected ? "Buyer selected an offer" : "No eligible provider"}</h2></div><span className={marketplaceResult.selected ? "chip good-chip" : "chip"}>{marketplaceResult.offers.length} OFFERS</span></div>
+          <div className="panel-head"><div><p className="dash-kicker">02 / PROVIDER OFFERS</p><h2>{marketplaceResult.offers.length ? "Choose a provider" : "No provider offers"}</h2><p className="panel-copy">The buyer-agent recommendation is shown for comparison only. Select an eligible offer yourself before continuing.</p></div><span className="chip">{marketplaceResult.offers.length} OFFERS</span></div>
           <div className="permission-status-grid">
             {marketplaceResult.offers.map(offer => <article className="permission-stat" key={offer.agentId}>
               <span>{offer.agentName}</span><strong>{offer.amountHbar ? offer.amountHbar + " HBAR" : "No eligible quote"}</strong>
               <small>{offer.serviceId} · {offer.status}</small><p>{offer.description}</p><p>{offer.reason}</p>
               <small>Capabilities: {offer.capabilities.join(", ")}</small><small>Identity: {offer.identityStatus}</small>
+              <button className={selectedMarketplaceServiceId === offer.serviceId ? "button primary small" : "button secondary small"} disabled={offer.status !== "eligible" || offer.negotiation.response !== "accepted" || typeof offer.amountTinybars !== "number"} onClick={() => { setSelectedMarketplaceServiceId(offer.serviceId); setTaskGoal(marketplaceGoal.trim()); setAllowedServiceIds([offer.serviceId]); setPlanDetails(null); setToken(""); setConsent(false); setNotice(`${offer.agentName} selected at ${offer.amountHbar} HBAR. No payment was attempted. Review permissions and authorize the task in Agent Playground.`); }}>{selectedMarketplaceServiceId === offer.serviceId ? "Selected provider ✓" : "Choose this provider"}</button>
+              {(offer.status !== "eligible" || offer.negotiation.response !== "accepted") && <small className="panel-footnote">Not selectable: this offer does not currently satisfy the marketplace budget, task intent, or hard payment ceiling.</small>}
               <div className="offer-response"><span className={offer.negotiation.response === "accepted" ? "outcome" : offer.negotiation.response === "rejected" ? "outcome bad" : "outcome"}>{offer.negotiation.response === "accepted" ? "Provider accepts" : offer.negotiation.response === "rejected" ? "Provider rejects" : "Provider counteroffer"}</span><small>{offer.negotiation.reason}</small>{offer.negotiation.counterOfferTinybars !== null && <small>Counter-offer: {offer.negotiation.counterOfferTinybars.toLocaleString()} tinybars (advisory only; live x402 quote remains final).</small>}</div>
             </article>)}
           </div>
           {marketplaceResult.negotiationLog.length > 0 && <div className="negotiation-log"><div className="panel-head"><div><p className="dash-kicker">NEGOTIATION TRANSCRIPT</p><h3>Buyer and provider responses</h3></div><span className="chip">{marketplaceResult.rounds} ROUND(S)</span></div>{marketplaceResult.negotiationLog.map((entry, index) => <div className="negotiation-log-row" key={entry.round + "-" + entry.agentId + "-" + index}><span>R{entry.round}</span><strong>{entry.agentName}</strong><span>{entry.action}</span><code>{entry.amountTinybars === null ? "—" : entry.amountTinybars.toLocaleString() + " tinybars"}</code><small>{entry.reason}</small></div>)}</div>}
-          {marketplaceResult.selected && <div className="safety-callout"><strong>Selected: {marketplaceResult.selected.agentName}</strong><p>{marketplaceResult.selected.reason} This selection is not payment authorization.</p><div className="button-row"><button className="button primary" onClick={() => navigate("playground")}>Continue to task authorization →</button><span className="panel-footnote">Your task and single-service allowlist are carried forward. You must still review limits, connect your wallet, and authorize execution in the Playground.</span></div></div>}
+          {marketplaceResult.selected && <div className="safety-callout"><strong>Buyer-agent recommendation: {marketplaceResult.selected.agentName}</strong><p>{marketplaceResult.selected.reason} This is a recommendation, not your choice or payment authorization.</p></div>}
+          {selectedMarketplaceServiceId && <div className="safety-callout"><strong>Your chosen provider: {marketplaceResult.offers.find(offer => offer.serviceId === selectedMarketplaceServiceId)?.agentName ?? selectedMarketplaceServiceId}</strong><p>The Playground will be restricted to this selected service for the next task. The API will still re-check live quote, wallet authorization, network, and spending policy before any payment.</p><div className="button-row"><button className="button primary" onClick={() => navigate("playground")}>Continue with chosen provider →</button><span className="panel-footnote">No payment has been attempted. You must still review limits and authorize execution.</span></div></div>}
           <p className="panel-footnote">Negotiation ID: <code>{marketplaceResult.negotiationId}</code>. Payment attempted: {marketplaceResult.paymentAttempted ? "yes" : "no"}. Current IDs are local and unverified; this deterministic workflow is not full A2A/ACP conformance.</p>
         </section>
       </>}
