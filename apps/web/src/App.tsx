@@ -25,6 +25,7 @@ type DashboardData = {
   networks?: { selectedNetwork: string; enabledNetworks: string[]; mainnet: { availableForReadinessReview: boolean; paymentExecutionEnabled: boolean; reason: string } };
   x402?: { network: string; sdkConfigured: boolean; accountId: string | null; receiverAccountId: string | null; paymentExecutionEnabled: boolean; reason: string };
   agentV2?: { enabled: boolean; killSwitchEnabled?: boolean; paymentExecutionEnabled: boolean };
+  autonomousMode?: { enabled: boolean; mode: string; paymentExecutionEnabled: boolean; requiresPerRunWalletApproval: boolean; policy: { maxPaymentTinybars: number; taskBudgetTinybars: number; dailyBudgetTinybars: number; maxPaidCallsPerTask: number; maxPaidCallsPerDay: number; allowedServiceIds: string[] } };
   agent?: { enabled: boolean; policy: { maxAmountHbar: string; allowedResource: string; note: string }; spendingFirewall: { maxPaymentTinybars: string; dailyBudgetTinybars: string; maxAttemptsPerUtcDay: number; ledger: string; multiInstanceSafe: boolean } };
   audit?: { valid: boolean; records: number; headHash?: string; ledger: string; independentlyAnchored: boolean; error?: string };
   anchors?: { enabled: boolean; anchors: Array<{ topicId: string; sequenceNumber: number; transactionId: string; auditSequence: number; auditRecordHash: string; mirrorNodeUrl: string }> };
@@ -64,6 +65,7 @@ export default function App() {
   const [visibleAnchorCount, setVisibleAnchorCount] = useState(7);
   const [visibleRecordCount, setVisibleRecordCount] = useState(10);
   const [sessionPaused, setSessionPaused] = useState(false);
+  const [autonomousConsent, setAutonomousConsent] = useState(false);
   const [page, setPage] = useState<PageId>(() => {
     const route = window.location.hash.replace("#", "");
     return (["overview", "playground", "marketplace", "permissions", "payments", "audit"] as string[]).includes(route) ? route as PageId : "overview";
@@ -97,17 +99,18 @@ export default function App() {
       return body as T;
     };
     try {
-      const [health, networks, x402, agent, agentV2, audit, anchors, history] = await Promise.all([
+      const [health, networks, x402, agent, agentV2, autonomousMode, audit, anchors, history] = await Promise.all([
         get<NonNullable<DashboardData["health"]>>("/api/health"),
         get<NonNullable<DashboardData["networks"]>>("/api/networks"),
         get<NonNullable<DashboardData["x402"]>>("/api/x402/status"),
         get<NonNullable<DashboardData["agent"]>>("/api/agent/status"),
         get<NonNullable<DashboardData["agentV2"]>>("/api/agent/v2/status"),
+        get<NonNullable<DashboardData["autonomousMode"]>>("/api/agent/v2/autonomous/status"),
         get<NonNullable<DashboardData["audit"]>>("/api/audit/status"),
         get<NonNullable<DashboardData["anchors"]>>("/api/audit/anchors"),
         get<{ records: AuditRecord[] }>("/api/audit/records?limit=100"),
       ]);
-      setData({ health, networks, x402, agent, agentV2, audit, anchors, history: history.records });
+      setData({ health, networks, x402, agent, agentV2, autonomousMode, audit, anchors, history: history.records });
       if (networks.enabledNetworks.includes(networkMode)) setNetworkMode(networks.selectedNetwork);
       if (!verifyInput.topicId && anchors.anchors[0]) {
         const latest = anchors.anchors[anchors.anchors.length - 1];
@@ -252,6 +255,43 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : "Agent run failed."); if (executionSubmitted) setNotice("Settlement status unknown — reconciling. Do not retry until you inspect Payments & Receipts and verify any transaction on HashScan."); await refresh(); }
     finally { setBusy(""); setActiveRunId(""); }
   }
+  async function runAutonomousAgent() {
+    let executionSubmitted = false;
+    setBusy("autonomous-agent"); setError(""); setNotice(""); setTaskReceipts([]); setTaskWarnings([]);
+    try {
+      if (sessionPaused) throw new Error("New task runs are paused in this browser. Resume them in Spending & Permissions first.");
+      if (!autonomousConsent) throw new Error("Confirm the separate autonomous-mode consent before starting.");
+      if (!data.autonomousMode?.enabled || !data.autonomousMode.paymentExecutionEnabled) throw new Error("Autonomous mode is disabled by the API. It must be explicitly enabled for local Testnet use.");
+      if (data.agentV2?.killSwitchEnabled) throw new Error("The server emergency kill switch is enabled.");
+      const goal = taskGoal.trim();
+      if (!goal || goal.length > 2000) throw new Error("Enter a task between 1 and 2,000 characters.");
+      const runId = crypto.randomUUID();
+      setActiveRunId(runId);
+      setNotice("Autonomous task submitted under the separate strict server policy. No wallet prompt is used. Do not retry while settlement is unresolved.");
+      executionSubmitted = true;
+      const response = await fetch(apiUrl("/api/agent/v2/autonomous/run"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, goal }),
+      });
+      const result = await response.json() as {
+        error?: string; status?: string; mode?: string; settlementStatus?: string; nextStep?: string;
+        selection?: { serviceId?: string; amountHbar?: string };
+        receipts?: Array<{ serviceId?: string; transactionId?: string; explorerUrl?: string; amountHbar?: string; status?: string }>;
+        expenditure?: { reservedHbar?: string; paidCalls?: number };
+        warnings?: string[];
+      };
+      if (!response.ok) throw new Error(result.error ?? result.nextStep ?? `Autonomous agent failed with HTTP ${response.status}.`);
+      setNotice(`Autonomous task returned a result. Receipts reported by the API: ${result.receipts?.length ?? 0}; reported spend ${result.expenditure?.reservedHbar ?? result.selection?.amountHbar ?? "unknown"} HBAR. Verify every receipt on HashScan. ${result.warnings?.join(" ") ?? ""}`);
+      setTaskReceipts((result.receipts ?? []).flatMap(receipt => receipt.transactionId && receipt.explorerUrl ? [{ serviceId: receipt.serviceId ?? "approved service", transactionId: receipt.transactionId, explorerUrl: receipt.explorerUrl, amountHbar: receipt.amountHbar ?? "unknown", status: receipt.status ?? "unknown" }] : []));
+      setTaskWarnings(result.warnings ?? []);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Autonomous task failed.");
+      if (executionSubmitted) setNotice("Autonomous settlement may be unknown. Do not retry. Inspect the reservation and verify HashScan/Mirror Node evidence first.");
+      await refresh();
+    } finally { setBusy(""); setActiveRunId(""); }
+  }
   async function negotiateMarketplace() {
     setBusy("marketplace"); setError(""); setNotice(""); setMarketplaceResult(null); setSelectedMarketplaceServiceId("");
     try {
@@ -392,6 +432,13 @@ export default function App() {
           </div>}
           {agentMode === "approval-required" && <p className="panel-footnote">You will review and sign the exact selected quote in your wallet when you run the task. A separate reusable grant is not required.</p>}
           {agentMode === "preview" && <p className="panel-footnote">Preview mode never pays. Choose one of the execution modes above to enable task execution.</p>}
+        </div>
+        <div className="user-policy-box autonomous-mode-box">
+          <div className="panel-head"><div><p className="dash-kicker">SEPARATE EXECUTION PATH</p><h3>Autonomous mode · no per-run wallet approval</h3></div><span className={data.autonomousMode?.enabled ? "chip good-chip" : "chip"}>{data.autonomousMode?.enabled ? "ENABLED LOCALLY" : "DISABLED"}</span></div>
+          <p className="panel-footnote">This is separate from the wallet-authorized mode above. It uses server-configured credentials and does not open a wallet prompt for each run. The API enforces a 50,000-tinybar per-payment/task cap, 150,000 tinybars daily, one paid call per task, at most three tasks per rolling 24 hours, and the <code>heder1-short-summary</code> provider only. Local Testnet only; never expose this endpoint publicly.</p>
+          <label className="consent-row"><input type="checkbox" checked={autonomousConsent} disabled={Boolean(busy) || sessionPaused} onChange={event => setAutonomousConsent(event.target.checked)} /><span>I understand this mode can initiate a Testnet payment without a wallet prompt for this run, under the fixed server-side limits above.</span></label>
+          <button className="button primary" disabled={Boolean(busy) || sessionPaused || !taskGoal.trim() || !autonomousConsent || !data.autonomousMode?.enabled || !data.autonomousMode.paymentExecutionEnabled || Boolean(data.agentV2?.killSwitchEnabled)} onClick={() => void runAutonomousAgent()}>{busy === "autonomous-agent" ? "Autonomous agent working…" : "Run in autonomous mode — no wallet prompt"}</button>
+          {!data.autonomousMode?.enabled && <small className="panel-footnote">To enable locally, set <code>HEDERA_AGENT_V2_AUTONOMOUS_MODE_ENABLED=true</code> in the API environment, alongside the existing Agent v2 Testnet settings, then restart the API.</small>}
         </div>
         <div className="action-row"><button className="button primary" disabled={Boolean(busy) || !taskGoal.trim()} onClick={() => void simulatePolicy(true)}>{busy === "simulate" ? "Checking service quotes…" : "Preview plan & compare services"}</button>
           <button className="button secondary" disabled={sessionPaused || Boolean(busy) || !taskGoal.trim() || !wallet || !isTestnet || !consent || (agentMode === "autonomous" && !token) || agentMode === "preview" || Boolean(data.agentV2?.killSwitchEnabled) || data.agentV2?.paymentExecutionEnabled === false} onClick={() => void runAgent()}>{busy === "agent" ? "Agent working…" : agentMode === "approval-required" ? "Review quote & run task" : "Run authorized task"}</button>
