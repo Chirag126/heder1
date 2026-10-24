@@ -878,7 +878,7 @@ app.post<{ Body: { runId?: string; goal?: string } }>("/api/agent/v2/autonomous/
     await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: {
       mode: "autonomous-no-wallet-prompt", runId, network: policy.network,
       budgetTinybars: policy.taskBudgetTinybars, maxPaymentTinybars: policy.maxPaymentTinybars,
-      allowedServiceIds: policy.allowedServiceIds, walletPromptRequired: false,
+      allowedServiceIds: policy.allowedServiceIds.join(","), walletPromptRequired: false,
     } });
     const result = await runAgentV2Task(
       { goal: goal.trim(), budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds, policy },
@@ -892,7 +892,7 @@ app.post<{ Body: { runId?: string; goal?: string } }>("/api/agent/v2/autonomous/
       receipts: result.receipts.map(receipt => ({ serviceId: receipt.serviceId, transactionId: receipt.transactionId, amountTinybars: receipt.amountTinybars })),
       warnings: result.warnings ?? [],
     });
-    await appendAuditEvent({ event: "agent.run_finished", outcome: result.warnings?.length ? "unknown" : "accepted", details: {
+    await appendAuditEvent({ event: "agent.run_finished", outcome: result.warnings?.length ? "failed" : "accepted", details: {
       mode: "autonomous-no-wallet-prompt", runId, paidCalls: result.expenditure.paidCalls,
       amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null,
       walletPromptRequired: false, dailyQuotaRemaining: quota.remaining,
