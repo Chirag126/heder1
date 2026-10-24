@@ -907,7 +907,7 @@ app.post<{ Body: { runId?: string; goal?: string } }>("/api/agent/v2/autonomous/
     try { await updateTaskRun(runId, AUTONOMOUS_MODE_ACCOUNT, "unknown", undefined, "payment_outcome_requires_reconciliation"); } catch { /* fail closed */ }
     await appendAuditEvent({ event: "agent.run_finished", outcome: "failed", details: { mode: "autonomous-no-wallet-prompt", runId, error: reason } });
     const status = /No approved service|No registered service|budgetTinybars|maximum|allowlist|No advertised|already been used/i.test(reason) ? 422 : 502;
-    return reply.code(status).send({ runId, mode: "autonomous-no-wallet-prompt", status: "stopped-safely", error: reason, paymentAttempted: false });
+    return reply.code(status).send({ runId, mode: "autonomous-no-wallet-prompt", status: "stopped-safely", error: reason, settlementStatus: "unknown", nextStep: "Do not retry automatically. Inspect the reservation and verify HashScan/Mirror Node evidence before reconciliation." });
   } finally {
     agentV2Runs.delete(runId);
     agentV2CompletedRuns.add(runId);
