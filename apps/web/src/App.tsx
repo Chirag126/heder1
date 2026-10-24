@@ -16,7 +16,7 @@ type PlanPreview = {
 type MarketplaceNegotiation = {
   negotiationId: string; decision: string; rounds: number;
   selected?: { agentId: string; agentName: string; serviceId: string; amountTinybars: number | null; amountHbar: string | null; reason: string } | null;
-  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string; negotiation: { response: string; reason: string; counterOfferTinybars: number | null } }>;
+  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; capabilityMatch: boolean; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string; negotiation: { response: string; reason: string; counterOfferTinybars: number | null } }>;
   negotiationLog: Array<{ round: number; agentId: string; agentName: string; action: string; amountTinybars: number | null; reason: string }>;
   paymentAttempted: boolean; nextStep: string; error?: string;
 };
@@ -214,7 +214,13 @@ export default function App() {
       const planResponse = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal, policy, budgetTinybars: policy.taskBudgetTinybars }) });
       const plan = await planResponse.json() as { error?: string; selected?: { serviceId: string; amountTinybars: number; amountHbar: string; asset: string; receiverAccountId: string }; paymentAttempted?: boolean };
       if (!planResponse.ok || !plan.selected) throw new Error(plan.error ?? "No eligible quote was found. No payment was attempted.");
-      setNotice(`Quote selected: ${plan.selected.serviceId}, ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR). Review the exact quote in your wallet signature request.`);
+      if (plan.selected.amountTinybars > policy.maxPaymentTinybars) {
+        throw new Error(`Selected quote is ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR), above your maximum per-payment cap of ${policy.maxPaymentTinybars} tinybars (${(policy.maxPaymentTinybars / 100_000_000).toFixed(8)} HBAR). No approval challenge was requested and no payment was attempted. Choose a cheaper eligible provider or revise the task; do not raise the cap unless you intentionally want to permit larger payments.`);
+      }
+      if (plan.selected.amountTinybars > policy.taskBudgetTinybars) {
+        throw new Error(`Selected quote exceeds your task budget of ${policy.taskBudgetTinybars} tinybars. No approval challenge was requested and no payment was attempted. Choose a cheaper eligible provider or adjust the task budget intentionally.`);
+      }
+      setNotice(`Quote selected: ${plan.selected.serviceId}, ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR). Quote is within your configured per-payment and task caps. Review the exact quote in your wallet signature request.`);
       const requiresApproval = agentMode === "approval-required" || plan.selected.amountTinybars > policy.approvalThresholdTinybars;
       let headers: Record<string, string> = { "content-type": "application/json" };
       if (requiresApproval) {
@@ -251,7 +257,12 @@ export default function App() {
     try {
       const budgetTinybars = Number(marketplaceBudget);
       if (!Number.isSafeInteger(budgetTinybars) || budgetTinybars < 1 || budgetTinybars > 500000) throw new Error("Marketplace budget must be between 1 and 500000 tinybars.");
-      const response = await fetch(apiUrl("/api/marketplace/negotiate"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: marketplaceGoal.trim(), budgetTinybars }) });
+      const paymentCap = Number(maxPaymentTinybars);
+      const taskCap = Number(taskBudgetTinybars);
+      if (!Number.isSafeInteger(paymentCap) || paymentCap < 1 || !Number.isSafeInteger(taskCap) || taskCap < 1) throw new Error("Set valid per-payment and task spending limits in Spending & Permissions first.");
+      const effectiveBudgetTinybars = Math.min(budgetTinybars, paymentCap, taskCap);
+      if (effectiveBudgetTinybars < 1) throw new Error("No marketplace budget remains under the current spending limits.");
+      const response = await fetch(apiUrl("/api/marketplace/negotiate"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: marketplaceGoal.trim(), budgetTinybars: effectiveBudgetTinybars }) });
       const result = await response.json() as MarketplaceNegotiation;
       if (!response.ok) throw new Error(result.error ?? "Marketplace negotiation failed.");
       setMarketplaceResult(result);
@@ -416,8 +427,9 @@ export default function App() {
               <span>{offer.agentName}</span><strong>{offer.amountHbar ? offer.amountHbar + " HBAR" : "No eligible quote"}</strong>
               <small>{offer.serviceId} · {offer.status}</small><p>{offer.description}</p><p>{offer.reason}</p>
               <small>Capabilities: {offer.capabilities.join(", ")}</small><small>Identity: {offer.identityStatus}</small>
-              <button className={selectedMarketplaceServiceId === offer.serviceId ? "button primary small" : "button secondary small"} disabled={offer.status !== "eligible" || offer.negotiation.response !== "accepted" || typeof offer.amountTinybars !== "number"} onClick={() => { setSelectedMarketplaceServiceId(offer.serviceId); setTaskGoal(marketplaceGoal.trim()); setAllowedServiceIds([offer.serviceId]); setPlanDetails(null); setToken(""); setConsent(false); setNotice(`${offer.agentName} selected at ${offer.amountHbar} HBAR. No payment was attempted. Review permissions and authorize the task in Agent Playground.`); }}>{selectedMarketplaceServiceId === offer.serviceId ? "Selected provider ✓" : "Choose this provider"}</button>
-              {(offer.status !== "eligible" || offer.negotiation.response !== "accepted") && <small className="panel-footnote">Not selectable: this offer does not currently satisfy the marketplace budget, task intent, or hard payment ceiling.</small>}
+              <button className={selectedMarketplaceServiceId === offer.serviceId ? "button primary small" : "button secondary small"} disabled={offer.status !== "eligible" || typeof offer.amountTinybars !== "number" || offer.negotiation.response === "rejected"} onClick={() => { const originalGoal = marketplaceGoal.trim(); const chosenGoal = offer.capabilityMatch ? originalGoal : offer.serviceId === "heder1-short-summary" ? `Create a concise summary of this request: ${originalGoal}` : `Create a detailed full report about this request: ${originalGoal}`; setSelectedMarketplaceServiceId(offer.serviceId); setTaskGoal(chosenGoal.slice(0, 2000)); setAllowedServiceIds([offer.serviceId]); setPlanDetails(null); setPolicySimulation(null); setToken(""); setConsent(false); setNotice(offer.capabilityMatch ? `${offer.agentName} selected at ${offer.amountHbar} HBAR. No payment was attempted. Review the task and re-consent/re-authorize in Agent Playground.` : `${offer.agentName} selected as an alternative at ${offer.amountHbar} HBAR. The task wording was adjusted to match this provider’s advertised capability; review it in Agent Playground. No payment was attempted. Re-consent and authorize again.`); }}>{selectedMarketplaceServiceId === offer.serviceId ? "Selected provider ✓" : offer.negotiation.response === "countered" ? "Choose alternative" : "Choose this provider"}</button>
+              {(offer.status !== "eligible" || offer.negotiation.response === "rejected") && <small className="panel-footnote">Not selectable: this quote is outside the current effective budget/cap or was rejected by the provider.</small>}
+              {offer.negotiation.response === "countered" && offer.status === "eligible" && <small className="panel-footnote">Alternative selection will adapt the task wording to this provider’s capability. Review the revised task before authorizing.</small>}
               <div className="offer-response"><span className={offer.negotiation.response === "accepted" ? "outcome" : offer.negotiation.response === "rejected" ? "outcome bad" : "outcome"}>{offer.negotiation.response === "accepted" ? "Provider accepts" : offer.negotiation.response === "rejected" ? "Provider rejects" : "Provider counteroffer"}</span><small>{offer.negotiation.reason}</small>{offer.negotiation.counterOfferTinybars !== null && <small>Counter-offer: {offer.negotiation.counterOfferTinybars.toLocaleString()} tinybars (advisory only; live x402 quote remains final).</small>}</div>
             </article>)}
           </div>
