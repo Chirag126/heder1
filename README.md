@@ -713,3 +713,44 @@ HCS verification evidence for the Phase 10 run:
 - Local audit endpoint reported `valid: true`, 153 records, and head hash equal to the final `agent.run_finished` hash.
 
 The HCS anchor is a separate consensus message, not the x402 payment transaction. These checks support the evidence for this specific Testnet run; they do not establish production readiness or protection from a host that can rewrite local files before anchoring.
+
+## Separate autonomous no-wallet-prompt mode
+
+The existing wallet-authorized agent mode and its endpoints are unchanged. For local Hedera Testnet experiments only, a separate opt-in endpoint is available:
+
+- `GET /api/agent/v2/autonomous/status` — reports whether the mode is enabled and exposes its fixed policy.
+- `POST /api/agent/v2/autonomous/run` — accepts a client-generated UUID `runId` and a task `goal`; it does not require a wallet signature or per-run human approval.
+
+Enable only in a local development environment by setting all of the following in `services/api/.env`:
+
+```dotenv
+HEDERA_NETWORK=testnet
+HEDERA_AGENT_V2_ENABLED=true
+HEDERA_AGENT_V2_AUTONOMOUS_MODE_ENABLED=true
+```
+
+This separate mode has intentionally stricter server-enforced limits than the wallet-authorized mode:
+
+| Control | Autonomous mode limit |
+| --- | --- |
+| Network / asset | Hedera Testnet / native HBAR only |
+| Maximum single payment | 50,000 tinybars (0.0005 HBAR) |
+| Maximum budget per task | 50,000 tinybars (0.0005 HBAR) |
+| Daily spend budget | 150,000 tinybars (0.0015 HBAR) |
+| Paid calls per task | 1 |
+| Tasks per rolling 24 hours | At most 3, also subject to the configured global task quota |
+| Provider allowlist | `heder1-short-summary` only |
+| Retry/idempotency | UUID `runId` is single-use; database-backed task-run claims are used when PostgreSQL is configured; uncertain settlements must be reconciled, never retried blindly |
+
+The server still uses the configured x402 payer key to sign and settle a payment; this mode removes the per-run wallet approval prompt, **not** the need for secure server-side credentials. Keep it disabled on public hosts and never expose this endpoint to untrusted callers. Production is hard-disabled in code. A request does not let callers set their own budget, provider allowlist, asset, or payment cap. The emergency kill switch and the existing runner's settlement-receipt validation remain active.
+
+Example (PowerShell, API must be running locally):
+
+```powershell
+$runId = [guid]::NewGuid().ToString()
+Invoke-RestMethod -Method Post http://127.0.0.1:4000/api/agent/v2/autonomous/run `
+  -ContentType "application/json" `
+  -Body (@{ runId = $runId; goal = "Return a short summary" } | ConvertTo-Json)
+```
+
+Check the returned settlement receipt on HashScan. If a request returns an unknown or uncertain settlement outcome, inspect the reservation and chain evidence before taking any further action. The same `runId` must never be reused.
