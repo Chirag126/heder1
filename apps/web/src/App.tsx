@@ -16,7 +16,7 @@ type PlanPreview = {
 type MarketplaceNegotiation = {
   negotiationId: string; decision: string; rounds: number;
   selected?: { agentId: string; agentName: string; serviceId: string; amountTinybars: number | null; amountHbar: string | null; reason: string } | null;
-  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string; negotiation: { response: string; reason: string; counterOfferTinybars: number | null } }>;
+  offers: Array<{ agentId: string; agentName: string; serviceId: string; description: string; capabilities: string[]; capabilityMatch: boolean; amountTinybars: number | null; amountHbar: string | null; status: string; reason: string; identityStatus: string; negotiation: { response: string; reason: string; counterOfferTinybars: number | null } }>;
   negotiationLog: Array<{ round: number; agentId: string; agentName: string; action: string; amountTinybars: number | null; reason: string }>;
   paymentAttempted: boolean; nextStep: string; error?: string;
 };
