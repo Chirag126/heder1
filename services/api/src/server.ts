@@ -791,6 +791,130 @@ app.post<{ Body: ReconciliationBody }>("/api/agent/v2/reservations/reconcile", {
   } catch (error) { return reply.code(500).send({ updated: false, error: error instanceof Error ? error.message : "Could not reconcile reservation." }); }
 });
 
+/**
+ * Separate no-wallet-prompt autonomous mode.
+ * Disabled by default; local Hedera Testnet only. It has a deliberately narrower
+ * budget and provider allowlist than the existing wallet-authorized route.
+ */
+const AUTONOMOUS_MODE_ACCOUNT = "0x0000000000000000000000000000000000000402";
+const AUTONOMOUS_MODE_POLICY = Object.freeze({
+  mode: "autonomous" as const,
+  network: "hedera:testnet",
+  maxPaymentTinybars: 50_000,
+  taskBudgetTinybars: 50_000,
+  dailyBudgetTinybars: 150_000,
+  maxPaidCallsPerTask: 1,
+  maxPaidCallsPerDay: 3,
+  allowedServiceIds: ["heder1-short-summary"],
+  allowedAssets: ["0.0.0"],
+  approvalThresholdTinybars: 50_000,
+});
+const autonomousModeRunIds = new Set<string>();
+
+function isAutonomousModeEnabled(): boolean {
+  return process.env.HEDERA_AGENT_V2_AUTONOMOUS_MODE_ENABLED === "true" &&
+    process.env.NODE_ENV !== "production" &&
+    process.env.HEDERA_NETWORK === "testnet" &&
+    isAgentV2Enabled() &&
+    process.env.HEDERA_AGENT_KILL_SWITCH !== "true";
+}
+
+app.get("/api/agent/v2/autonomous/status", async () => ({
+  enabled: isAutonomousModeEnabled(),
+  mode: "autonomous-no-wallet-prompt",
+  network: "hedera:testnet",
+  policy: AUTONOMOUS_MODE_POLICY,
+  paymentExecutionEnabled: isAutonomousModeEnabled(),
+  requiresPerRunWalletApproval: false,
+  note: "Separate opt-in local Testnet mode. The existing wallet-authorized /api/agent/v2/run route is unchanged. Production execution is always disabled.",
+}));
+
+app.post<{ Body: { runId?: string; goal?: string } }>("/api/agent/v2/autonomous/run", {
+  schema: { body: { type: "object", additionalProperties: false, required: ["runId", "goal"], properties: {
+    runId: { type: "string", format: "uuid" },
+    goal: { type: "string", minLength: 1, maxLength: 2000 },
+  } } },
+}, async (request, reply) => {
+  if (!isAutonomousModeEnabled()) {
+    return reply.code(403).send({
+      error: "Autonomous no-wallet-prompt mode is disabled.",
+      hint: "For local Hedera Testnet only, set HEDERA_NETWORK=testnet, HEDERA_AGENT_V2_ENABLED=true, and HEDERA_AGENT_V2_AUTONOMOUS_MODE_ENABLED=true. This mode cannot run in production.",
+      paymentAttempted: false,
+    });
+  }
+  const { runId, goal } = request.body ?? {};
+  if (typeof runId !== "string" || !/^[0-9a-f-]{36}$/i.test(runId)) return reply.code(400).send({ error: "A client-generated UUID runId is required for idempotency.", paymentAttempted: false });
+  if (typeof goal !== "string" || !goal.trim() || goal.length > 2000) return reply.code(400).send({ error: "goal is required and must be at most 2000 characters.", paymentAttempted: false });
+  if (agentV2Runs.has(runId) || agentV2CompletedRuns.has(runId) || autonomousModeRunIds.has(runId)) {
+    return reply.code(409).send({ error: "That autonomous runId has already been used. Do not retry a run with an uncertain settlement; inspect its receipt and reservation first.", paymentAttempted: false });
+  }
+
+  const policy: UserSpendingPolicy = {
+    ...AUTONOMOUS_MODE_POLICY,
+    allowedServiceIds: [...AUTONOMOUS_MODE_POLICY.allowedServiceIds],
+    allowedAssets: [...AUTONOMOUS_MODE_POLICY.allowedAssets],
+    expiresAt: Date.now() + 120_000,
+  };
+  const requestHash = createHash("sha256").update(JSON.stringify({ runId, goal: goal.trim(), mode: "autonomous-no-wallet-prompt", policy })).digest("hex");
+  const controller = new AbortController();
+  try {
+    const claimed = await claimTaskRun({ runId, walletAddress: AUTONOMOUS_MODE_ACCOUNT, idempotencyKey: "autonomous:" + runId, requestHash });
+    if (!claimed) return reply.code(409).send({ error: "This autonomous run ID or idempotency key has already been used.", paymentAttempted: false });
+    autonomousModeRunIds.add(runId);
+    let quotaLimit: number;
+    try { quotaLimit = Math.min(3, dailyTaskQuota()); }
+    catch { return reply.code(500).send({ error: "Autonomous task quota configuration is invalid.", paymentAttempted: false }); }
+    const quota = await consumeRateLimit("heder1:autonomous-mode:task-quota", quotaLimit, 24 * 60 * 60 * 1000);
+    reply.header("X-Heder1-Autonomous-Quota-Limit", String(quotaLimit));
+    reply.header("X-Heder1-Autonomous-Quota-Remaining", String(quota.remaining));
+    if (!quota.allowed) {
+      reply.header("Retry-After", String(quota.retryAfterSeconds));
+      await appendAuditEvent({ event: "agent.authorization_rejected", outcome: "rejected", details: { mode: "autonomous-no-wallet-prompt", action: "daily_task_quota_exceeded", quotaLimit } });
+      return reply.code(429).send({ error: "Autonomous mode daily task quota exceeded.", paymentAttempted: false, retryAfterSeconds: quota.retryAfterSeconds });
+    }
+
+    agentV2Runs.set(runId, controller);
+    await updateTaskRun(runId, AUTONOMOUS_MODE_ACCOUNT, "reserved");
+    await appendAuditEvent({ event: "agent.run_started", outcome: "started", details: {
+      mode: "autonomous-no-wallet-prompt", runId, network: policy.network,
+      budgetTinybars: policy.taskBudgetTinybars, maxPaymentTinybars: policy.maxPaymentTinybars,
+      allowedServiceIds: policy.allowedServiceIds.join(","), walletPromptRequired: false,
+    } });
+    const result = await runAgentV2Task(
+      { goal: goal.trim(), budgetTinybars: policy.taskBudgetTinybars, maxPaidCalls: policy.maxPaidCallsPerTask, allowedServiceIds: policy.allowedServiceIds, policy },
+      { signal: controller.signal, runId, accountId: AUTONOMOUS_MODE_ACCOUNT },
+    );
+    const costReport = reportActualTaskCost(result.receipts);
+    const taskStatus = result.warnings?.length ? "unknown" : "settled";
+    await updateTaskRun(runId, AUTONOMOUS_MODE_ACCOUNT, taskStatus, {
+      mode: "autonomous-no-wallet-prompt",
+      paidCalls: result.expenditure.paidCalls,
+      receipts: result.receipts.map(receipt => ({ serviceId: receipt.serviceId, transactionId: receipt.transactionId, amountTinybars: receipt.amountTinybars })),
+      warnings: result.warnings ?? [],
+    });
+    await appendAuditEvent({ event: "agent.run_finished", outcome: result.warnings?.length ? "failed" : "accepted", details: {
+      mode: "autonomous-no-wallet-prompt", runId, paidCalls: result.expenditure.paidCalls,
+      amountTinybars: result.expenditure.reservedTinybars, transactionId: result.receipts[0]?.transactionId ?? null,
+      walletPromptRequired: false, dailyQuotaRemaining: quota.remaining,
+    } });
+    return reply.code(200).send({
+      ...result, mode: "autonomous-no-wallet-prompt", costReport,
+      authorization: { type: "server-configured-strict-policy", walletPromptRequired: false },
+      usage: { dailyTaskQuota: quotaLimit, remaining: quota.remaining, window: "rolling-24-hours" },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Autonomous task failed.";
+    try { await updateTaskRun(runId, AUTONOMOUS_MODE_ACCOUNT, "unknown", undefined, "payment_outcome_requires_reconciliation"); } catch { /* fail closed */ }
+    await appendAuditEvent({ event: "agent.run_finished", outcome: "failed", details: { mode: "autonomous-no-wallet-prompt", runId, error: reason } });
+    const status = /No approved service|No registered service|budgetTinybars|maximum|allowlist|No advertised|already been used/i.test(reason) ? 422 : 502;
+    return reply.code(status).send({ runId, mode: "autonomous-no-wallet-prompt", status: "stopped-safely", error: reason, settlementStatus: "unknown", nextStep: "Do not retry automatically. Inspect the reservation and verify HashScan/Mirror Node evidence before reconciliation." });
+  } finally {
+    agentV2Runs.delete(runId);
+    agentV2CompletedRuns.add(runId);
+    if (agentV2CompletedRuns.size > 1000) agentV2CompletedRuns.delete(agentV2CompletedRuns.values().next().value as string);
+  }
+});
+
 app.post<{ Body: AgentV2TaskInput & { runId?: string } }>("/api/agent/v2/run", {
   schema: { body: { type: "object", additionalProperties: false, required: ["runId","goal"], properties: {
     runId: { type: "string", format: "uuid" },
