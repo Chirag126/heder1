@@ -214,7 +214,13 @@ export default function App() {
       const planResponse = await fetch(apiUrl("/api/agent/v2/plan"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal, policy, budgetTinybars: policy.taskBudgetTinybars }) });
       const plan = await planResponse.json() as { error?: string; selected?: { serviceId: string; amountTinybars: number; amountHbar: string; asset: string; receiverAccountId: string }; paymentAttempted?: boolean };
       if (!planResponse.ok || !plan.selected) throw new Error(plan.error ?? "No eligible quote was found. No payment was attempted.");
-      setNotice(`Quote selected: ${plan.selected.serviceId}, ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR). Review the exact quote in your wallet signature request.`);
+      if (plan.selected.amountTinybars > policy.maxPaymentTinybars) {
+        throw new Error(`Selected quote is ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR), above your maximum per-payment cap of ${policy.maxPaymentTinybars} tinybars (${(policy.maxPaymentTinybars / 100_000_000).toFixed(8)} HBAR). No approval challenge was requested and no payment was attempted. Choose a cheaper eligible provider or revise the task; do not raise the cap unless you intentionally want to permit larger payments.`);
+      }
+      if (plan.selected.amountTinybars > policy.taskBudgetTinybars) {
+        throw new Error(`Selected quote exceeds your task budget of ${policy.taskBudgetTinybars} tinybars. No approval challenge was requested and no payment was attempted. Choose a cheaper eligible provider or adjust the task budget intentionally.`);
+      }
+      setNotice(`Quote selected: ${plan.selected.serviceId}, ${plan.selected.amountTinybars} tinybars (${plan.selected.amountHbar} HBAR). Quote is within your configured per-payment and task caps. Review the exact quote in your wallet signature request.`);
       const requiresApproval = agentMode === "approval-required" || plan.selected.amountTinybars > policy.approvalThresholdTinybars;
       let headers: Record<string, string> = { "content-type": "application/json" };
       if (requiresApproval) {
